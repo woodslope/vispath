@@ -28,6 +28,7 @@
     <div class="topbar-actions">
       <span class="status-pill" id="serviceStatus"><span class="status-dot"></span><span id="serviceStatusText">正在检查 AI 服务</span></span>
       <button class="button button-quiet" id="apiSettingsBtn" type="button">API 配置</button>
+      <button class="button button-quiet" id="outputSettingsBtn" type="button">输出设置</button>
       <button class="button button-quiet" id="resetBtn" type="button">重置</button>
     </div>
   </header>
@@ -303,6 +304,46 @@
     </div>
   </dialog>
 
+  <dialog class="confirm-dialog output-dialog" id="outputSettingsDialog" aria-labelledby="outputSettingsTitle" aria-describedby="outputSettingsDescription">
+    <div class="confirm-dialog-body">
+      <div class="confirm-dialog-head">
+        <div class="title-pair dialog-title">
+          <span class="step-label">LOCAL OUTPUT</span>
+          <h2 id="outputSettingsTitle">输出设置</h2>
+          <small class="dialog-meta">同步和异步图片都可自动保存到选定目录</small>
+        </div>
+        <button class="icon-button dialog-close" type="button" data-dialog-close aria-label="关闭输出设置" title="关闭输出设置"><svg class="ui-icon" viewBox="0 0 48 48" aria-hidden="true"><path d="M14 14L34 34M34 14L14 34" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </div>
+      <div class="confirm-dialog-content">
+        <section class="output-settings-panel" aria-labelledby="outputSettingsGroupTitle">
+          <div class="output-settings-heading">
+            <h3 id="outputSettingsGroupTitle">自动保存图片</h3>
+            <span class="output-settings-status" id="outputSettingsStatus" role="status">未设置</span>
+          </div>
+          <label class="choice-option output-auto-save-option" for="outputAutoSaveInput">
+            <input id="outputAutoSaveInput" type="checkbox">
+            <span><strong>自动保存新生成图片</strong><small>图片完成后写入下面的输出目录。</small></span>
+          </label>
+          <div class="output-directory-row">
+            <div class="output-directory-summary">
+              <span class="output-directory-label">输出目录</span>
+              <strong id="outputDirectoryName">未选择</strong>
+              <small id="outputDirectoryPermission">需要选择一个本地文件夹</small>
+            </div>
+            <button class="button" id="chooseOutputDirectoryBtn" type="button">选择目录</button>
+          </div>
+          <p class="field-helper output-settings-support-note" id="outputSettingsSupportNote">选择目录后，图片可以自动写入本地文件夹。</p>
+          <p class="field-error hidden output-settings-error" id="outputSettingsError" role="alert"></p>
+        </section>
+        <p id="outputSettingsDescription">输出目录保存图片文件；历史记录、任务状态和必要的图片缓存仍保留在当前浏览器中。浏览器不会向页面暴露文件夹的绝对路径。</p>
+      </div>
+      <div class="confirm-dialog-actions">
+        <button class="button" id="cancelOutputSettingsBtn" type="button">取消</button>
+        <button class="button button-primary" id="saveOutputSettingsBtn" type="button">保存设置</button>
+      </div>
+    </div>
+  </dialog>
+
   <dialog class="confirm-dialog" id="clearApiSettingsDialog" aria-labelledby="clearApiSettingsDialogTitle" aria-describedby="clearApiSettingsDialogDescription">
     <div class="confirm-dialog-body">
       <div class="confirm-dialog-head">
@@ -479,6 +520,6 @@
 
   <input id="imageRecoveryFileInput" type="file" accept="image/png,image/jpeg,image/webp" hidden>
   <div class="toast" id="toast" role="status"></div>
-  <script src="app.bundle.js?v=59df223dabdf"></script>
+  <script src="app.bundle.js?v=1b75f3deb9d1"></script>
 </body>
 </html>

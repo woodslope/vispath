@@ -252,6 +252,7 @@ select { padding: 0 34px 0 11px; }
 .submission-bar .button { min-width: 112px; width: auto; }
 .empty-board.compact-empty { min-height: 190px; margin-top: 12px; }
 .empty-board { display: grid; min-height: 300px; align-content: center; justify-items: center; gap: 12px; padding: 32px; border: 1px dashed var(--line-strong); text-align: center; }
+#emptyGenerationBoard { margin-top: 12px; }
 .state-marker { display: grid; place-items: center; width: 40px; height: 40px; border: 1px solid var(--ink); font-size: 22px; font-weight: 400; line-height: 1; }
 .state-copy { display: grid; justify-items: center; gap: 8px; }
 .empty-board h3 { margin: 0; font-size: 17px; }
@@ -345,6 +346,10 @@ select { padding: 0 34px 0 11px; }
 .generation-card-meta > span { min-width: 0; overflow-wrap: anywhere; }
 .generation-card-meta > span:last-child { margin-left: auto; }
 .generation-image-diagnostics { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 9px; }
+.generation-output-status { min-width: 0; color: var(--muted); overflow-wrap: anywhere; }
+.generation-output-status.is-pending, .generation-output-status.is-saving { color: var(--warning); }
+.generation-output-status.is-saved { color: var(--success); }
+.generation-output-status.is-error { color: var(--danger); font-weight: 700; }
 .generation-image-cache-error { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; align-items: start; padding: 8px 9px; border: 1px solid color-mix(in srgb, var(--danger) 28%, transparent); background: color-mix(in srgb, var(--danger) 7%, var(--paper)); color: var(--ink); }
 .generation-image-cache-error strong { min-width: 0; align-self: center; color: var(--danger); line-height: 1.35; }
 .generation-image-cache-error-message { grid-column: 1 / -1; min-width: 0; color: var(--muted); line-height: 1.5; }
@@ -414,7 +419,12 @@ body:has(#promptStage.is-stage-active) .toast { bottom: calc(var(--toast-block-i
 .confirm-dialog::backdrop { background: rgba(21, 24, 22, .48); backdrop-filter: blur(3px); }
 .confirm-dialog-body { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; max-height: calc(100dvh - 50px); padding: var(--dialog-padding); }
 .confirm-dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-.confirm-dialog-content { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.confirm-dialog-content { min-height: 0; margin-right: calc(0px - var(--space-3)); padding-right: var(--space-3); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.setup-scroll-region, .confirm-dialog-content { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+.setup-scroll-region::-webkit-scrollbar, .confirm-dialog-content::-webkit-scrollbar { width: 8px; }
+.setup-scroll-region::-webkit-scrollbar-track, .confirm-dialog-content::-webkit-scrollbar-track { background: transparent; }
+.setup-scroll-region::-webkit-scrollbar-thumb, .confirm-dialog-content::-webkit-scrollbar-thumb { border: 1px solid transparent; border-radius: 0; background: var(--line-strong); background-clip: content-box; }
+.setup-scroll-region::-webkit-scrollbar-thumb:hover, .confirm-dialog-content::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
 .dialog-close { width: var(--icon-button-size); height: var(--icon-button-size); flex: 0 0 var(--icon-button-size); margin: -4px -4px 0 0; border-color: var(--line-strong); background: var(--paper); }
 .dialog-close:hover { border-color: var(--ink); color: var(--ink); background: var(--paper); }
 .confirm-dialog h2 { margin: 6px 0 0; font-size: 20px; }
@@ -449,6 +459,23 @@ body:has(#promptStage.is-stage-active) .toast { bottom: calc(var(--toast-block-i
 .comparison-caption small { margin-top: 4px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, monospace; font-size: 9px; }
 .comparison-favorite { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; color: var(--warning); }
 .api-dialog { width: min(560px, calc(100vw - 32px)); }
+.output-dialog { width: min(520px, calc(100vw - 32px)); }
+.output-settings-panel { display: grid; gap: 12px; margin-top: 16px; padding: 16px; border: 1px solid var(--line); background: var(--surface); }
+.output-settings-heading { display: flex; min-width: 0; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--line-strong); }
+.output-settings-heading h3 { margin: 0; font-size: 14px; }
+.output-settings-status { color: var(--muted); font-family: ui-monospace, SFMono-Regular, monospace; font-size: 9px; font-weight: 700; overflow-wrap: anywhere; text-align: right; }
+.output-settings-status.is-success { color: var(--success); }
+.output-settings-status.is-error { color: var(--danger); }
+.output-auto-save-option { min-height: 52px; }
+.output-auto-save-option input:disabled { cursor: not-allowed; }
+.output-directory-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding-top: 4px; border-top: 1px solid var(--line); }
+.output-directory-summary { display: grid; min-width: 0; gap: 3px; }
+.output-directory-label { color: var(--muted); font-size: 9px; }
+.output-directory-summary strong { min-width: 0; font-size: 12px; overflow-wrap: anywhere; }
+.output-directory-summary small { color: var(--muted); font-size: 9px; line-height: 1.4; }
+.output-directory-row .button { flex: 0 0 auto; }
+.output-settings-support-note { margin-top: 0; }
+.output-settings-error { margin: 0; line-height: 1.5; }
 .api-dialog-title-row { display: flex; min-width: 0; align-items: center; gap: 8px; }
 .api-dialog-title-row h2 { flex: 0 0 auto; }
 .dialog-title-action { display: inline-flex; min-height: 28px; align-items: center; margin-top: 3px; padding: 0 4px; border: 0; color: var(--accent); background: transparent; font-size: 12px; font-weight: 700; cursor: pointer; }
@@ -527,6 +554,7 @@ body:has(#promptStage.is-stage-active) .toast { bottom: calc(var(--toast-block-i
 .api-protocol-summary dt { color: var(--muted); }
 .api-protocol-summary dd { min-width: 0; overflow-wrap: anywhere; }
 .api-protocol-summary code { font-family: ui-monospace, SFMono-Regular, monospace; }
+.api-protocol-summary + .image-diagnostic-panel { margin-top: var(--space-2); }
 .brand-attribution { display: grid; gap: 3px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-family: ui-monospace, SFMono-Regular, monospace; font-size: 9px; font-weight: 400; line-height: 1.5; }
 .brand-attribution strong { color: var(--ink); font-size: 10px; }
 
@@ -541,7 +569,7 @@ body:has(#promptStage.is-stage-active) .toast { bottom: calc(var(--toast-block-i
   .panel-heading .title-pair, .results-heading .title-pair { display: grid; gap: 2px; }
   .control-panel .panel-heading h2, .results-heading h2 { margin: 0; font-size: 18px; }
   .control-panel .form-stack { min-height: 0; grid-column: 1; grid-template-rows: minmax(0, 1fr) auto; align-content: stretch; gap: 0; margin-top: 12px; overflow: hidden; }
-  .control-panel .setup-scroll-region { min-height: 0; padding-right: 8px; padding-bottom: 16px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+  .control-panel .setup-scroll-region { min-height: 0; padding-right: var(--space-3); padding-bottom: 16px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
   .control-panel .setup-action { position: static; margin: 0; padding: 12px 8px 16px 0; background: var(--panel); backdrop-filter: none; }
   .control-panel .inline-blueprint { position: static; min-height: 0; grid-column: 2; align-self: stretch; margin: 12px 0 0; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--line-strong); }
   .prompt-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -613,6 +641,8 @@ body:has(#promptStage.is-stage-active) .toast { bottom: calc(var(--toast-block-i
   .history-stats { grid-template-columns: repeat(2, 1fr); }
   .result-filters { grid-template-columns: 1fr 1fr auto; }
   .result-search { grid-column: 1 / -1; }
+  .output-directory-row { grid-template-columns: 1fr; }
+  .output-directory-row .button { width: 100%; }
   .variant-grid { gap: 12px; }
   .confirm-dialog-actions { grid-template-columns: 1fr; }
   .api-settings-grid { grid-template-columns: 1fr; }

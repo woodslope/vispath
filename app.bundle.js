@@ -267,17 +267,19 @@ const DB_VERSION = 1;
 const STORE_NAME = "workspace";
 const HISTORY_KEY = "generation-history";
 const API_SETTINGS_KEY = "api-settings";
+const OUTPUT_SETTINGS_KEY = "output-settings";
 const IMAGE_CACHE_KEY_PREFIX = "generation-image-cache:";
 const REFERENCE_IMAGE_CACHE_KEY_PREFIX = "reference-image-cache:";
-const HISTORY_SCHEMA_VERSION = 15;
+const HISTORY_SCHEMA_VERSION = 17;
 const ENTRY_FIELDS = [
   "id", "batchId", "batchNumber", "batchCreatedAt", "variantTitle", "changeSummary", "promptSnapshot",
   "blueprintSnapshot", "submissionSnapshot", "parentGenerationId", "refinementDepth",
   "explorationDimensionId", "explorationDimensionName", "explorationOption", "artClass", "ratio", "resolution",
-  "generationMode", "responseFormat", "actualResponseFormat", "createdAt", "startedAt", "completedAt", "status",
+  "generationMode", "responseFormat", "actualResponseFormat", "createdAt", "queuedAt", "submittedAt", "startedAt", "completedAt", "status",
   "referenceUsage", "referenceImageCacheKey",
   "imageUrl", "originalImageUrl", "imageCacheKey", "imageCacheBackend", "imageCacheStatus", "imageCacheErrorCode", "imageCacheErrorMessage", "imageMimeType", "imageByteSize",
-  "imageWidth", "imageHeight", "errorMessage", "requestId", "taskId", "taskStatus", "taskProgress", "favorite"
+  "imageWidth", "imageHeight", "errorMessage", "requestId", "taskId", "taskStatus", "taskProgress", "favorite",
+  "outputSaveStatus", "outputFileName", "outputSavedAt", "outputSaveError"
 ];
 
 const BLUEPRINT_FIELDS = ["intent", "subject", "context", "audience", "composition", "visualLanguage", "palette", "lighting", "material", "textLayout"];
@@ -345,6 +347,10 @@ function sanitizeEntry(entry) {
   clean.batchNumber = String(clean.batchNumber || "00");
   clean.batchId = String(clean.batchId || `legacy_batch_${clean.batchNumber}`);
   clean.batchCreatedAt = typeof clean.batchCreatedAt === "string" ? clean.batchCreatedAt : "";
+  clean.startedAt = typeof clean.startedAt === "string" ? clean.startedAt : "";
+  clean.queuedAt = typeof clean.queuedAt === "string" ? clean.queuedAt : clean.startedAt;
+  clean.submittedAt = typeof clean.submittedAt === "string" ? clean.submittedAt : "";
+  clean.completedAt = typeof clean.completedAt === "string" ? clean.completedAt : "";
   clean.status = ["loading", "ready", "error"].includes(clean.status) ? clean.status : "error";
   if (typeof clean.imageUrl !== "string" || clean.imageUrl.startsWith("blob:")) clean.imageUrl = "";
   clean.originalImageUrl = typeof clean.originalImageUrl === "string" ? clean.originalImageUrl : "";
@@ -365,6 +371,10 @@ function sanitizeEntry(entry) {
   clean.imageWidth = Number.isInteger(clean.imageWidth) && clean.imageWidth > 0 ? clean.imageWidth : undefined;
   clean.imageHeight = Number.isInteger(clean.imageHeight) && clean.imageHeight > 0 ? clean.imageHeight : undefined;
   clean.favorite = Boolean(clean.favorite);
+  clean.outputSaveStatus = ["pending", "saving", "saved", "error"].includes(clean.outputSaveStatus) ? clean.outputSaveStatus : "";
+  clean.outputFileName = typeof clean.outputFileName === "string" ? clean.outputFileName : "";
+  clean.outputSavedAt = typeof clean.outputSavedAt === "string" ? clean.outputSavedAt : "";
+  clean.outputSaveError = typeof clean.outputSaveError === "string" ? clean.outputSaveError : "";
   clean.parentGenerationId = typeof clean.parentGenerationId === "string" ? clean.parentGenerationId : "";
   clean.refinementDepth = Number.isInteger(clean.refinementDepth) && clean.refinementDepth >= 0 ? clean.refinementDepth : 0;
   clean.blueprintSnapshot = sanitizeBlueprintSnapshot(clean.blueprintSnapshot);
@@ -515,6 +525,31 @@ function loadApiSettings() {
   return runTransaction("readonly", (store) => store.get(API_SETTINGS_KEY));
 }
 
+function isDirectoryHandle(value) {
+  return Boolean(value && typeof value.getFileHandle === "function");
+}
+
+function sanitizeOutputSettings(payload) {
+  const directoryHandle = isDirectoryHandle(payload?.directoryHandle) ? payload.directoryHandle : null;
+  return {
+    schemaVersion: 1,
+    autoSaveEnabled: Boolean(payload?.autoSaveEnabled),
+    directoryHandle,
+    directoryName: String(payload?.directoryName || directoryHandle?.name || "").trim(),
+    savedAt: typeof payload?.savedAt === "string" ? payload.savedAt : ""
+  };
+}
+
+async function loadOutputSettings() {
+  const payload = await runTransaction("readonly", (store) => store.get(OUTPUT_SETTINGS_KEY));
+  return sanitizeOutputSettings(payload);
+}
+
+function saveOutputSettings(settings) {
+  const clean = sanitizeOutputSettings({ ...settings, savedAt: new Date().toISOString() });
+  return runTransaction("readwrite", (store) => store.put(clean, OUTPUT_SETTINGS_KEY));
+}
+
 function saveApiSettings(settings) {
   const legacyBaseUrl = String(settings?.apiBaseUrl || "").trim().replace(/\/+$/, "");
   const clean = {
@@ -576,6 +611,85 @@ function createImageEditRequest({ image, imageName = "reference.png", ...options
   for (const [key, value] of Object.entries(request)) formData.append(key, String(value));
   formData.append("image", image, String(imageName || "reference.png"));
   return formData;
+}
+
+function createOutputError(message, code = "output_failed") {
+  const error = new Error(message);
+  error.outputErrorCode = code;
+  return error;
+}
+
+function canUseOutputDirectoryPicker() {
+  return typeof window !== "undefined" && typeof window.showDirectoryPicker === "function";
+}
+
+function isOutputDirectoryHandle(handle) {
+  return Boolean(handle && typeof handle.getFileHandle === "function");
+}
+
+async function getOutputDirectoryPermission(handle) {
+  if (!isOutputDirectoryHandle(handle)) return "denied";
+  if (typeof handle.queryPermission !== "function") return "prompt";
+  try {
+    return await handle.queryPermission({ mode: "readwrite" });
+  } catch {
+    return "denied";
+  }
+}
+
+async function requestOutputDirectoryPermission(handle) {
+  if (!isOutputDirectoryHandle(handle)) return "denied";
+  if (typeof handle.requestPermission !== "function") return getOutputDirectoryPermission(handle);
+  try {
+    return await handle.requestPermission({ mode: "readwrite" });
+  } catch {
+    return "denied";
+  }
+}
+
+async function writeBlobToOutputDirectory(directoryHandle, fileName, blob) {
+  if (!isOutputDirectoryHandle(directoryHandle)) throw createOutputError("输出目录尚未选择", "directory_missing");
+  if (!(blob instanceof Blob) || blob.size === 0) throw createOutputError("图片内容为空，无法保存", "image_missing");
+  const permission = await getOutputDirectoryPermission(directoryHandle);
+  if (permission !== "granted") throw createOutputError("输出目录尚未授权，请在“输出设置”中重新选择目录", "permission_required");
+  const fileHandle = await directoryHandle.getFileHandle(fileName, { create: true });
+  const writable = await fileHandle.createWritable();
+  try {
+    await writable.write(blob);
+    await writable.close();
+  } catch (cause) {
+    try {
+      await writable.abort?.();
+    } catch {}
+    throw createOutputError(cause?.message || "图片写入输出目录失败", "write_failed");
+  }
+  return { fileName, byteSize: blob.size };
+}
+
+function getOutputImageExtension(mimeType = "") {
+  const normalized = String(mimeType || "").toLowerCase();
+  if (normalized === "image/jpeg" || normalized === "image/jpg") return "jpg";
+  if (normalized === "image/webp") return "webp";
+  if (normalized === "image/gif") return "gif";
+  return "png";
+}
+
+function sanitizeFilePart(value, fallback) {
+  const clean = String(value || fallback)
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 56);
+  return clean || fallback;
+}
+
+function createOutputImageFileName(entry, mimeType = "image/png") {
+  const date = String(entry?.batchCreatedAt || "").slice(0, 10).replace(/-/g, "") || "undated";
+  const batch = String(entry?.batchNumber || "00").padStart(2, "0");
+  const title = sanitizeFilePart(entry?.variantTitle, "生成图片");
+  const id = sanitizeFilePart(String(entry?.id || "image").replace(/[^a-z0-9_-]/gi, "").slice(-6), "image");
+  return `VisPath_${date}_B${batch}_${title}_${id}.${getOutputImageExtension(mimeType)}`;
 }
 
 const LOCKED_FIELD_LABELS = Object.freeze({
@@ -1062,6 +1176,7 @@ const state = {
   resultFilters: { query: "", status: "all", batchId: "all" },
   batchNumber: 0,
   apiSettings: null,
+  outputSettings: { autoSaveEnabled: false, directoryHandle: null, directoryName: "" },
   directionCompletionError: ""
 };
 
@@ -1091,6 +1206,7 @@ const stageButtons = [...document.querySelectorAll(".stage-nav [data-stage-targe
 const blueprintSection = document.querySelector(".inline-blueprint");
 const blueprintToggle = $("toggleBlueprintBtn");
 const apiSettingsDialog = $("apiSettingsDialog");
+const outputSettingsDialog = $("outputSettingsDialog");
 const clearApiSettingsDialog = $("clearApiSettingsDialog");
 const resetDialog = $("resetDialog");
 const editSetupDialog = $("editSetupDialog");
@@ -1108,9 +1224,17 @@ let pendingBatchSubmissionId = "";
 let pendingBatchReuseConfirmed = false;
 let batchSubmissionReferencePreviewUrl = "";
 let historySaveQueue = Promise.resolve();
-let generationQueue = Promise.resolve();
+const generationQueue = [];
+const scheduledGenerationIds = new Set();
+let activeGenerationCount = 0;
+let activeSyncGenerationCount = 0;
+let asyncGenerationConcurrency = 2;
+let asyncGenerationConcurrencyRestoreTimer = 0;
 let imageCacheQueue = Promise.resolve();
 let historyImageCacheQueue = Promise.resolve();
+let outputSaveQueue = Promise.resolve();
+let outputSettingsDraft = null;
+let outputDirectoryStatusToken = 0;
 let textTooltipSyncFrame = 0;
 const IMAGE_CLEANUP_KEY = "ai-visual-direction-board-pending-image-cleanup";
 const OPEN_BATCHES_KEY = "vispath-open-generation-batches";
@@ -1120,6 +1244,12 @@ const IMAGE_CLEANUP_DELAY = 5500;
 const IMAGE_POLL_INTERVAL = 3000;
 const IMAGE_POLL_MAX_ATTEMPTS = 120;
 const IMAGE_RETRY_DELAYS = [5000, 15000];
+const IMAGE_ASYNC_CONCURRENCY = 2;
+const IMAGE_RATE_LIMIT_COOLDOWN = 60000;
+const GLOBAL_GENERATION_SLOT_NAMES = ["vispath-image-slot-1", "vispath-image-slot-2"];
+const GLOBAL_GENERATION_SYNC_LOCK = "vispath-image-sync-coordinator";
+const GLOBAL_GENERATION_ENTRY_LOCK_PREFIX = "vispath-image-entry:";
+const GLOBAL_RATE_LIMIT_KEY = "vispath-image-rate-limit-until";
 const imageCleanupTimers = new Map();
 const pendingOpaqueImageCleanupUrls = new Map();
 const generatedImageObjectUrls = new Map();
@@ -1287,6 +1417,189 @@ function createImageDownloadName(entry) {
     .replace(/^-|-$/g, "")
     .slice(0, 60);
   return `${title || "生成图片"}.png`;
+}
+
+function normalizeOutputSettings(settings = {}) {
+  const directoryHandle = isOutputDirectoryHandle(settings.directoryHandle) ? settings.directoryHandle : null;
+  return {
+    autoSaveEnabled: Boolean(settings.autoSaveEnabled),
+    directoryHandle,
+    directoryName: String(settings.directoryName || directoryHandle?.name || "").trim()
+  };
+}
+
+function getOutputSettingsForForm() {
+  return outputSettingsDraft || state.outputSettings;
+}
+
+function isOutputAutoSaveReady(settings = state.outputSettings) {
+  return Boolean(settings.autoSaveEnabled && isOutputDirectoryHandle(settings.directoryHandle));
+}
+
+function renderOutputDirectoryStatus(settings = getOutputSettingsForForm(), permission = "") {
+  const hasHandle = isOutputDirectoryHandle(settings.directoryHandle);
+  const pickerSupported = canUseOutputDirectoryPicker();
+  const status = $("outputSettingsStatus");
+  const directoryName = $("outputDirectoryName");
+  const permissionLabel = $("outputDirectoryPermission");
+  const supportNote = $("outputSettingsSupportNote");
+  const chooseButton = $("chooseOutputDirectoryBtn");
+  const autoSaveInput = $("outputAutoSaveInput");
+  if (!status || !directoryName || !permissionLabel || !supportNote || !chooseButton || !autoSaveInput) return;
+
+  directoryName.textContent = hasHandle ? settings.directoryName || settings.directoryHandle.name || "已选择目录" : "未选择";
+  permissionLabel.textContent = !hasHandle
+    ? "需要选择一个本地文件夹"
+    : permission === "granted"
+      ? "目录已授权，可自动写入"
+      : permission === "denied"
+        ? "授权已失效，请重新选择目录"
+        : permission === "checking"
+          ? "正在检查目录授权…"
+          : "需要重新授权后才能自动写入";
+  status.textContent = !pickerSupported && !hasHandle
+    ? "当前浏览器不支持"
+    : !hasHandle
+      ? "未设置"
+      : permission === "granted"
+        ? settings.autoSaveEnabled ? "自动保存已启用" : "目录已选择"
+        : "需要授权";
+  status.className = `output-settings-status${permission === "granted" && settings.autoSaveEnabled ? " is-success" : permission === "denied" ? " is-error" : ""}`;
+  chooseButton.disabled = !pickerSupported && !hasHandle;
+  chooseButton.textContent = hasHandle ? "重新选择目录" : "选择目录";
+  autoSaveInput.checked = Boolean(settings.autoSaveEnabled);
+  autoSaveInput.disabled = !hasHandle;
+  supportNote.textContent = !pickerSupported && !hasHandle
+    ? "当前浏览器不支持直接写入指定文件夹，请使用支持 File System Access API 的桌面浏览器。"
+    : "目录用于保存图片文件；历史记录、任务状态和必要的图片缓存仍保留在当前浏览器中。";
+}
+
+async function refreshOutputDirectoryStatus(settings = getOutputSettingsForForm()) {
+  const token = ++outputDirectoryStatusToken;
+  renderOutputDirectoryStatus(settings, isOutputDirectoryHandle(settings.directoryHandle) ? "checking" : "");
+  const permission = isOutputDirectoryHandle(settings.directoryHandle)
+    ? await getOutputDirectoryPermission(settings.directoryHandle)
+    : "";
+  if (token !== outputDirectoryStatusToken) return;
+  renderOutputDirectoryStatus(settings, permission);
+}
+
+function renderGeneratedImageOutputStatus(entry) {
+  if (!entry.outputSaveStatus) return "";
+  const status = entry.outputSaveStatus;
+  const label = status === "saved"
+    ? `已保存到输出目录${entry.outputFileName ? ` · ${entry.outputFileName}` : ""}`
+    : status === "saving"
+      ? "正在保存到输出目录"
+      : status === "pending"
+        ? "等待自动保存"
+        : `输出目录保存失败${entry.outputSaveError ? ` · ${entry.outputSaveError}` : ""}`;
+  return `<span class="generation-output-status is-${status}" role="status">${escapeHtml(label)}</span>`;
+}
+
+function setEntryOutputSaveState(entry, status, errorMessage = "") {
+  entry.outputSaveStatus = status;
+  entry.outputSaveError = status === "error" ? String(errorMessage || "图片写入失败") : "";
+  if (status !== "saved") entry.outputSavedAt = "";
+}
+
+async function loadGeneratedImageBlobForOutput(entry) {
+  const cached = await loadGenerationImageCache(entry.id).catch(() => null);
+  if (cached?.blob instanceof Blob && cached.blob.size > 0) return cached.blob;
+  const sourceUrl = entry.originalImageUrl || entry.imageUrl;
+  if (!isGeneratedImageSourceUrl(sourceUrl) && !String(sourceUrl || "").startsWith("blob:")) {
+    const error = new Error("当前结果没有可读取的图片来源");
+    error.outputErrorCode = "image_missing";
+    throw error;
+  }
+  return fetchGeneratedImageBlob(sourceUrl);
+}
+
+async function saveEntryImageToOutput(entry, { automatic = false } = {}) {
+  const currentEntry = state.generationEntries.find((item) => item.id === entry.id);
+  if (!currentEntry || currentEntry.status !== "ready") return;
+  const directoryHandle = state.outputSettings.directoryHandle;
+  if (!isOutputDirectoryHandle(directoryHandle)) {
+    const error = new Error("请先在“输出设置”中选择输出目录");
+    error.outputErrorCode = "directory_missing";
+    throw error;
+  }
+  const permission = await getOutputDirectoryPermission(directoryHandle);
+  if (permission !== "granted") {
+    const error = new Error("输出目录授权已失效，请在“输出设置”中重新选择目录");
+    error.outputErrorCode = "permission_required";
+    throw error;
+  }
+  const blob = await loadGeneratedImageBlobForOutput(currentEntry);
+  const fileName = currentEntry.outputFileName || createOutputImageFileName(currentEntry, blob.type);
+  setEntryOutputSaveState(currentEntry, "saving");
+  await persistGenerationHistory();
+  renderGenerationFeed({ openBatchId: currentEntry.batchId || `legacy_batch_${currentEntry.batchNumber || "00"}` });
+  await writeBlobToOutputDirectory(directoryHandle, fileName, blob);
+  const latestEntry = state.generationEntries.find((item) => item.id === entry.id);
+  if (!latestEntry || latestEntry.status !== "ready") return;
+  latestEntry.outputFileName = fileName;
+  latestEntry.outputSaveStatus = "saved";
+  latestEntry.outputSavedAt = new Date().toISOString();
+  latestEntry.outputSaveError = "";
+  await persistGenerationHistory();
+  renderGenerationFeed({ openBatchId: latestEntry.batchId || `legacy_batch_${latestEntry.batchNumber || "00"}` });
+  if (!automatic) showToast(`已保存到输出目录：${fileName}`);
+}
+
+function queueGeneratedImageOutput(entry, cachePromise = Promise.resolve()) {
+  outputSaveQueue = outputSaveQueue
+    .then(() => cachePromise)
+    .then(async () => {
+      const currentEntry = state.generationEntries.find((item) => item.id === entry.id);
+      if (!currentEntry || currentEntry.status !== "ready" || currentEntry.outputSaveStatus !== "pending") return;
+      try {
+        await saveEntryImageToOutput(currentEntry, { automatic: true });
+      } catch (error) {
+        const latestEntry = state.generationEntries.find((item) => item.id === entry.id);
+        if (!latestEntry || latestEntry.status !== "ready") return;
+        setEntryOutputSaveState(latestEntry, "error", error.message || "图片写入输出目录失败");
+        await persistGenerationHistory();
+        renderGenerationFeed({ openBatchId: latestEntry.batchId || `legacy_batch_${latestEntry.batchNumber || "00"}` });
+        showToast(`自动保存失败：${latestEntry.outputSaveError}`);
+      }
+    })
+    .catch(() => {});
+  return outputSaveQueue;
+}
+
+async function handleSaveGeneratedImage(entry) {
+  if (!entry?.imageUrl) return;
+  const directoryHandle = state.outputSettings.directoryHandle;
+  if (isOutputDirectoryHandle(directoryHandle)) {
+    try {
+      const permission = await requestOutputDirectoryPermission(directoryHandle);
+      if (permission !== "granted") {
+        const error = new Error("输出目录授权未完成，请在“输出设置”中重新选择目录");
+        error.outputErrorCode = "permission_required";
+        throw error;
+      }
+      setEntryOutputSaveState(entry, "saving");
+      renderGenerationFeed({ openBatchId: entry.batchId || `legacy_batch_${entry.batchNumber || "00"}` });
+      await persistGenerationHistory();
+      await saveEntryImageToOutput(entry);
+    } catch (error) {
+      const currentEntry = state.generationEntries.find((item) => item.id === entry.id);
+      if (currentEntry) {
+        setEntryOutputSaveState(currentEntry, "error", error.message || "图片写入输出目录失败");
+        await persistGenerationHistory();
+        renderGenerationFeed({ openBatchId: currentEntry.batchId || `legacy_batch_${currentEntry.batchNumber || "00"}` });
+      }
+      showToast(error.message || "图片写入输出目录失败");
+    }
+    return;
+  }
+  const link = document.createElement("a");
+  link.href = entry.imageUrl;
+  link.download = createImageDownloadName(entry);
+  link.rel = "noopener";
+  link.click();
+  showToast("已开始下载图片");
 }
 
 async function fetchGeneratedImageBlob(imageUrl) {
@@ -2161,9 +2474,27 @@ function formatGenerationElapsed(startedAt, completedAt = "") {
   return `${minutes} 分 ${seconds % 60} 秒`;
 }
 
+function renderGenerationTiming(entry) {
+  const totalStart = entry.queuedAt || entry.startedAt;
+  if (!totalStart || !entry.completedAt) return "时间未知";
+  const total = formatGenerationElapsed(totalStart, entry.completedAt);
+  if (!entry.queuedAt || !entry.submittedAt) return `总 ${total}`;
+  const queued = formatGenerationElapsed(entry.queuedAt, entry.submittedAt);
+  const service = formatGenerationElapsed(entry.submittedAt, entry.completedAt);
+  return `总 ${total} · 排队 ${queued} · 服务端 ${service}`;
+}
+
+function renderActiveGenerationTiming(entry) {
+  const totalStart = entry.queuedAt || entry.startedAt || entry.batchCreatedAt;
+  if (entry.submittedAt) {
+    return `服务端 <span class="generation-elapsed" data-timing-start="${escapeHtml(entry.submittedAt)}">${formatGenerationElapsed(entry.submittedAt)}</span> · 总 <span class="generation-elapsed" data-timing-start="${escapeHtml(totalStart)}">${formatGenerationElapsed(totalStart)}</span>`;
+  }
+  return `排队 <span class="generation-elapsed" data-timing-start="${escapeHtml(totalStart)}">${formatGenerationElapsed(totalStart)}</span>`;
+}
+
 function updateGenerationElapsed() {
-  document.querySelectorAll(".generation-elapsed[data-started-at]").forEach((element) => {
-    element.textContent = formatGenerationElapsed(element.dataset.startedAt);
+  document.querySelectorAll(".generation-elapsed[data-timing-start]").forEach((element) => {
+    element.textContent = formatGenerationElapsed(element.dataset.timingStart);
   });
 }
 
@@ -2232,16 +2563,24 @@ function scheduleTextTooltipOverflowSync() {
 }
 
 function renderGenerationActions(entry) {
-  const isReady = entry.status === "ready";
-  const isLoading = entry.status === "loading";
-  const canRefine = isReady && Boolean(entry.imageUrl || entry.originalImageUrl || entry.imageCacheKey || entry.imageCacheStatus === "ready");
-  const canDownloadImage = isReady && Boolean(entry.imageUrl);
+ const isReady = entry.status === "ready";
+ const isLoading = entry.status === "loading";
+ const canRefine = isReady && Boolean(entry.imageUrl || entry.originalImageUrl || entry.imageCacheKey || entry.imageCacheStatus === "ready");
+  const outputSaveBusy = entry.outputSaveStatus === "pending" || entry.outputSaveStatus === "saving";
+  const canDownloadImage = isReady && Boolean(entry.imageUrl) && !outputSaveBusy;
   const canCopyPrompt = Boolean(entry.promptSnapshot);
   const retryLabel = entry.status === "error" ? "重新尝试" : "重新生成";
+  const outputLabel = entry.outputSaveStatus === "saved"
+    ? "再次保存"
+    : entry.outputSaveStatus === "saving" || entry.outputSaveStatus === "pending"
+      ? "保存中…"
+      : entry.outputSaveStatus === "error"
+        ? "重试保存"
+        : "保存本地";
   return `
     <div class="generation-actions" role="group" aria-label="${escapeHtml(entry.variantTitle)}操作">
-      <button class="button${canRefine ? " button-primary" : ""}" type="button" data-action="continue" title="${canRefine ? "基于当前结果图片和方案继续细化" : isReady ? "当前结果图片不可用，无法按画面细化" : "图片生成完成后可用"}" ${canRefine ? "" : "disabled"}>基于此结果细化</button>
-      <button class="button" type="button" data-action="download-image" title="${canDownloadImage ? "保存生成图片到本地" : isGeneratedImageMissing(entry) ? "本地图片缓存已丢失，请重新生成" : "图片生成完成后可用"}" ${canDownloadImage ? "" : "disabled"}>保存本地</button>
+     <button class="button${canRefine ? " button-primary" : ""}" type="button" data-action="continue" title="${canRefine ? "基于当前结果图片和方案继续细化" : isReady ? "当前结果图片不可用，无法按画面细化" : "图片生成完成后可用"}" ${canRefine ? "" : "disabled"}>基于此结果细化</button>
+      <button class="button" type="button" data-action="download-image" title="${outputSaveBusy ? "图片正在自动保存" : canDownloadImage ? isOutputAutoSaveReady() || entry.outputSaveStatus ? "保存到输出目录" : "保存生成图片到本地" : isGeneratedImageMissing(entry) ? "本地图片缓存已丢失，请重新生成" : "图片生成完成后可用"}" ${canDownloadImage ? "" : "disabled"}>${outputLabel}</button>
       <button class="button" type="button" data-action="copy-generation" title="${canCopyPrompt ? "复制完整提示词" : "当前记录缺少提示词"}" ${canCopyPrompt ? "" : "disabled"}>复制提示词</button>
       <button class="button${entry.status === "error" ? " button-primary" : ""}" type="button" data-action="retry" title="${isLoading ? "当前图片生成中" : retryLabel}" ${isLoading ? "disabled" : ""}>${retryLabel}</button>
     </div>
@@ -2302,10 +2641,10 @@ function renderGenerationFeed({ openBatchId = "" } = {}) {
         ${entry.imageUrl ? `<button class="generation-image-open" type="button" data-action="open-image" aria-label="查看${escapeHtml(entry.variantTitle)}大图"><span class="generation-ratio-badge" aria-hidden="true">${escapeHtml(entry.ratio || "未设比例")}</span><span class="generation-image-frame" style="--generation-image-ratio:${getDisplayAspectRatio(entry).toFixed(6)}"><img src="${escapeHtml(entry.imageUrl)}" alt="${escapeHtml(entry.variantTitle)}生成结果"><span class="generation-image-recovery" role="status"><strong>图片未加载</strong><small>临时链接可能已失效</small></span></span><span class="generation-image-open-label">查看大图</span></button>` : isGeneratedImageMissing(entry) ? `<div class="generation-state error" role="status"><span class="state-marker" aria-hidden="true">!</span><strong>本地图片缓存已丢失</strong><small>可重新生成，或通过恢复选项关联已有备份</small><button class="button button-quiet" type="button" data-action="open-image-recovery">恢复选项</button></div>` : `<div class="generation-state ${escapeHtml(entry.status)}" role="status"><span class="state-marker" aria-hidden="true">${entry.status === "error" ? "!" : "···"}</span><strong>${entry.status === "error" ? "生成未完成" : "正在生成图片"}</strong><small>${entry.status === "error" ? "查看失败原因，再决定是否重试" : "可以离开当前页面继续创建其他方案"}</small></div>`}
       </div>
       <div class="generation-body">
-        <div class="generation-card-meta"><span>请求 ${escapeHtml(entry.resolution || "1K")} · ${escapeHtml(entry.ratio || "未设比例")} · ${entry.generationMode === "sync" ? "同步" : "异步"}${entry.referenceUsage === "explore" ? " · 参考图参与" : ""}${entry.actualResponseFormat ? ` · 实际返回 ${entry.actualResponseFormat === "b64_json" ? "Base64" : "URL"}` : ""}</span><span>${entry.status !== "loading" && entry.startedAt && entry.completedAt ? `耗时 ${escapeHtml(formatGenerationElapsed(entry.startedAt, entry.completedAt))}` : "等待生成结果"}</span></div>
+        <div class="generation-card-meta"><span>请求 ${escapeHtml(entry.resolution || "1K")} · ${escapeHtml(entry.ratio || "未设比例")} · ${entry.generationMode === "sync" ? "同步" : "异步"}${entry.referenceUsage === "explore" ? " · 参考图参与" : ""}${entry.actualResponseFormat ? ` · 实际返回 ${entry.actualResponseFormat === "b64_json" ? "Base64" : "URL"}` : ""}</span><span>${entry.status !== "loading" && entry.completedAt ? `耗时 ${escapeHtml(renderGenerationTiming(entry))}` : "等待生成结果"}</span></div>
         ${entry.explorationDimensionName ? `<div class="generation-exploration"><span class="generation-exploration-label">${escapeHtml(entry.explorationDimensionName)}</span><strong class="generation-exploration-value">${escapeHtml(entry.explorationOption || "未记录具体方向")}</strong></div>` : ""}
-        ${entry.imageUrl ? `<div class="generation-image-diagnostics">${renderActualImageSize(entry)}${renderGeneratedImageCacheStatus(entry)}</div>` : entry.status === "error" ? `<div class="generation-image-diagnostics"><span class="generation-error-tooltip-trigger text-tooltip-trigger"><span class="generation-error-label">失败原因</span><span class="generation-error-summary" data-tooltip-overflow-target>${escapeHtml(entry.errorMessage || "图片生成失败，请稍后重试")}</span><span class="generation-error-tooltip text-tooltip" id="generation-error-${escapeHtml(entry.id)}" role="tooltip"><strong>失败原因</strong><span>${escapeHtml(entry.errorMessage || "图片生成失败，请稍后重试")}</span>${entry.requestId ? `<small>Request ID：${escapeHtml(entry.requestId)}</small>` : ""}</span></span></div>` : ""}
-        ${entry.status === "loading" ? `<div class="generation-progress" role="status"><span class="generation-spinner" aria-hidden="true"></span><span><strong>${escapeHtml(entry.taskStatus === "queued" ? "任务排队中" : entry.taskStatus ? "服务端生成中" : "正在提交任务")}${entry.taskProgress ? ` · ${escapeHtml(entry.taskProgress)}` : ""}</strong><small>已等待 <span class="generation-elapsed" data-started-at="${escapeHtml(entry.startedAt || entry.batchCreatedAt)}">${formatGenerationElapsed(entry.startedAt || entry.batchCreatedAt)}</span>${entry.taskId ? `<span class="generation-task-id">task_id：${escapeHtml(entry.taskId)}</span>` : ""}</small></span></div>` : ""}
+        ${entry.imageUrl ? `<div class="generation-image-diagnostics">${renderActualImageSize(entry)}${renderGeneratedImageCacheStatus(entry)}${renderGeneratedImageOutputStatus(entry)}</div>` : entry.status === "error" ? `<div class="generation-image-diagnostics"><span class="generation-error-tooltip-trigger text-tooltip-trigger"><span class="generation-error-label">失败原因</span><span class="generation-error-summary" data-tooltip-overflow-target>${escapeHtml(entry.errorMessage || "图片生成失败，请稍后重试")}</span><span class="generation-error-tooltip text-tooltip" id="generation-error-${escapeHtml(entry.id)}" role="tooltip"><strong>失败原因</strong><span>${escapeHtml(entry.errorMessage || "图片生成失败，请稍后重试")}</span>${entry.requestId ? `<small>Request ID：${escapeHtml(entry.requestId)}</small>` : ""}</span></span></div>` : ""}
+        ${entry.status === "loading" ? `<div class="generation-progress" role="status"><span class="generation-spinner" aria-hidden="true"></span><span><strong>${escapeHtml(getGenerationProgressLabel(entry))}${entry.taskProgress ? ` · ${escapeHtml(entry.taskProgress)}` : ""}</strong><small>${renderActiveGenerationTiming(entry)}${entry.taskId ? `<span class="generation-task-id">task_id：${escapeHtml(entry.taskId)}</span>` : ""}</small></span></div>` : ""}
         <div class="generation-prompt-snapshot">
           <div class="prompt-preview" tabindex="0" role="region" aria-label="完整提示词">${escapeHtml(entry.promptSnapshot)}</div>
         </div>
@@ -2323,6 +2662,14 @@ function renderGenerationFeed({ openBatchId = "" } = {}) {
 
 function shouldSimulateFailure(prompt) {
   return /模拟失败|故意失败/.test(prompt);
+}
+
+function getGenerationProgressLabel(entry) {
+  if (entry.taskStatus === "pending_submission") return "等待提交";
+  if (entry.taskStatus === "retry_wait") return "限流退避中";
+  if (entry.taskStatus === "submitting" || !entry.taskStatus) return "正在提交任务";
+  if (entry.taskStatus === "queued") return "任务排队中";
+  return "服务端生成中";
 }
 
 async function requestDirectBlueprint(input) {
@@ -2476,6 +2823,11 @@ async function requestGeneratedImage(entry) {
       : JSON.stringify(createImageRequest(requestOptions));
     const headers = referenceImage ? authHeaders : { ...authHeaders, "Content-Type": "application/json" };
     let response;
+    if (!entry.submittedAt) entry.submittedAt = new Date().toISOString();
+    entry.taskStatus = "submitting";
+    entry.taskProgress = "";
+    renderGenerationFeed();
+    await persistGenerationHistory();
     try {
       response = await fetch(url, { method: "POST", headers, body });
     } catch {
@@ -2511,6 +2863,11 @@ async function requestGeneratedImage(entry) {
     }
     const message = (typeof payload.error === "string" ? payload.error : payload.error?.message) || payload.message || `图片生成失败（HTTP ${response.status}）`;
     if ([429, 502, 503].includes(response.status) && attempt < IMAGE_RETRY_DELAYS.length) {
+      if (response.status === 429) reduceGenerationConcurrencyAfterRateLimit();
+      entry.taskStatus = "retry_wait";
+      entry.taskProgress = "";
+      renderGenerationFeed();
+      await persistGenerationHistory();
       await new Promise((resolve) => setTimeout(resolve, IMAGE_RETRY_DELAYS[attempt]));
       continue;
     }
@@ -2558,6 +2915,7 @@ async function runGeneration(entry) {
       storageStatus: "保存中",
       failureReason: ""
     }, entry.id);
+    if (isOutputAutoSaveReady()) setEntryOutputSaveState(entry, "pending");
   } catch (error) {
     taskStillPending = Boolean(error.imageTaskStillPending && entry.taskId);
     entry.status = taskStillPending ? "loading" : "error";
@@ -2574,15 +2932,132 @@ async function runGeneration(entry) {
   entry.completedAt = taskStillPending ? "" : new Date().toISOString();
   renderGenerationFeed();
   await persistGenerationHistory();
-  if (entry.status === "ready" && entry.imageUrl) queueGeneratedImageCache(entry);
+  if (entry.status === "ready" && entry.imageUrl) {
+    const cachePromise = queueGeneratedImageCache(entry);
+    if (entry.outputSaveStatus === "pending") queueGeneratedImageOutput(entry, cachePromise);
+  }
   showToast(getGenerationToastMessage(entry));
 }
 
-function enqueueGenerationEntries(entries) {
-  generationQueue = generationQueue.then(async () => {
-    for (const entry of entries) await runGeneration(entry);
+function reduceGenerationConcurrencyAfterRateLimit() {
+  const rateLimitUntil = Date.now() + IMAGE_RATE_LIMIT_COOLDOWN;
+  asyncGenerationConcurrency = 1;
+  try {
+    localStorage.setItem(GLOBAL_RATE_LIMIT_KEY, String(rateLimitUntil));
+  } catch {}
+  window.clearTimeout(asyncGenerationConcurrencyRestoreTimer);
+  asyncGenerationConcurrencyRestoreTimer = window.setTimeout(() => {
+    asyncGenerationConcurrency = IMAGE_ASYNC_CONCURRENCY;
+    try {
+      if (Number(localStorage.getItem(GLOBAL_RATE_LIMIT_KEY)) <= Date.now()) localStorage.removeItem(GLOBAL_RATE_LIMIT_KEY);
+    } catch {}
+    pumpGenerationQueue();
+  }, IMAGE_RATE_LIMIT_COOLDOWN);
+}
+
+function getEffectiveAsyncGenerationConcurrency() {
+  let sharedRateLimitUntil = 0;
+  try {
+    sharedRateLimitUntil = Number(localStorage.getItem(GLOBAL_RATE_LIMIT_KEY)) || 0;
+  } catch {}
+  return sharedRateLimitUntil > Date.now() ? 1 : asyncGenerationConcurrency;
+}
+
+function canUseCrossTabGenerationLocks() {
+  return typeof navigator !== "undefined" && typeof navigator.locks?.request === "function";
+}
+
+async function shouldRunCrossTabGenerationEntry(entry) {
+  const saved = await loadGenerationHistory().catch(() => null);
+  const latest = saved?.entries?.find((item) => item.id === entry.id);
+  if (!latest) return true;
+  if (latest.status !== "loading") {
+    Object.assign(entry, latest);
+    renderGenerationFeed();
+    return false;
+  }
+  if (entry.taskId) return latest.taskId === entry.taskId;
+  if (latest.taskId || latest.taskStatus === "submitting" || latest.submittedAt && latest.submittedAt !== entry.submittedAt) {
+    Object.assign(entry, latest);
+    renderGenerationFeed();
+    return false;
+  }
+  return true;
+}
+
+async function runWithCrossTabEntryLock(entry, action) {
+  return navigator.locks.request(`${GLOBAL_GENERATION_ENTRY_LOCK_PREFIX}${entry.id}`, { ifAvailable: true }, async (lock) => {
+    if (!lock || !await shouldRunCrossTabGenerationEntry(entry)) return;
+    return action();
   });
-  return generationQueue;
+}
+
+async function runWithCrossTabAsyncSlot(entry, action) {
+  while (entry.status === "loading") {
+    const slotNames = GLOBAL_GENERATION_SLOT_NAMES.slice(0, getEffectiveAsyncGenerationConcurrency());
+    for (const slotName of slotNames) {
+      let acquired = false;
+      let result;
+      await navigator.locks.request(slotName, { ifAvailable: true }, async (lock) => {
+        if (!lock) return;
+        acquired = true;
+        result = await runWithCrossTabEntryLock(entry, action);
+      });
+      if (acquired) return result;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+}
+
+function runWithCrossTabGenerationLock(entry, action) {
+  if (!canUseCrossTabGenerationLocks()) return action();
+  if (entry.generationMode !== "sync") return runWithCrossTabAsyncSlot(entry, action);
+  return navigator.locks.request(GLOBAL_GENERATION_SYNC_LOCK, () =>
+    navigator.locks.request(GLOBAL_GENERATION_SLOT_NAMES[0], () =>
+      navigator.locks.request(GLOBAL_GENERATION_SLOT_NAMES[1], () => runWithCrossTabEntryLock(entry, action))));
+}
+
+function startQueuedGeneration(entry) {
+  const isSync = entry.generationMode === "sync";
+  activeGenerationCount += 1;
+  if (isSync) activeSyncGenerationCount += 1;
+  void runWithCrossTabGenerationLock(entry, () => runGeneration(entry)).finally(() => {
+    activeGenerationCount -= 1;
+    if (isSync) activeSyncGenerationCount -= 1;
+    scheduledGenerationIds.delete(entry.id);
+    pumpGenerationQueue();
+  });
+}
+
+function pumpGenerationQueue() {
+  if (activeSyncGenerationCount > 0) return;
+  while (generationQueue.length) {
+    const entry = generationQueue[0];
+    if (entry.status !== "loading") {
+      generationQueue.shift();
+      scheduledGenerationIds.delete(entry.id);
+      continue;
+    }
+    if (entry.generationMode === "sync") {
+      if (activeGenerationCount > 0) return;
+      generationQueue.shift();
+      startQueuedGeneration(entry);
+      return;
+    }
+    if (activeGenerationCount >= getEffectiveAsyncGenerationConcurrency()) return;
+    generationQueue.shift();
+    startQueuedGeneration(entry);
+  }
+}
+
+function enqueueGenerationEntries(entries) {
+  entries.forEach((entry) => {
+    if (!entry?.id || entry.status !== "loading" || scheduledGenerationIds.has(entry.id)) return;
+    if (!entry.taskId && !entry.taskStatus) entry.taskStatus = "pending_submission";
+    scheduledGenerationIds.add(entry.id);
+    generationQueue.push(entry);
+  });
+  pumpGenerationQueue();
 }
 
 async function recordGeneratedImageDimensions(image) {
@@ -2987,9 +3462,16 @@ async function confirmRetryGeneration() {
   entry.actualResponseFormat = undefined;
   entry.imageWidth = undefined;
   entry.imageHeight = undefined;
+  entry.outputSaveStatus = "";
+  entry.outputFileName = "";
+  entry.outputSavedAt = "";
+  entry.outputSaveError = "";
   entry.status = "loading";
   entry.errorMessage = "";
-  entry.startedAt = new Date().toISOString();
+  entry.taskStatus = "pending_submission";
+  entry.queuedAt = new Date().toISOString();
+  entry.submittedAt = "";
+  entry.startedAt = entry.queuedAt;
   entry.completedAt = "";
   renderGenerationFeed();
   persistGenerationHistory();
@@ -3088,8 +3570,13 @@ async function restoreGenerationHistory() {
     const pendingCleanup = readPendingImageCleanup();
     const pendingIds = new Set(pendingCleanup.map((item) => item.entryId));
     let interruptedCount = 0;
+    let resumedSubmissionCount = 0;
     const savedEntries = (saved?.entries || []).map((entry) => {
       if (entry.status !== "loading" || entry.taskId) return entry;
+      if (["pending_submission", "retry_wait"].includes(entry.taskStatus)) {
+        resumedSubmissionCount += 1;
+        return entry;
+      }
       interruptedCount += 1;
       return { ...entry, status: "error", errorMessage: "页面刷新后无法继续接收原请求结果；服务端可能仍在生成并扣费，请先核对账单。" };
     });
@@ -3114,7 +3601,11 @@ async function restoreGenerationHistory() {
     if (state.generationEntries.length) {
       $("feedHint").textContent = `已恢复 ${state.generationEntries.length} 条 · ${groupGenerationEntries().length} 个批次 · 当前浏览器`;
       if (window.matchMedia("(min-width: 900px)").matches) goToStage("resultStage", { resetScroll: true });
-      showToast(interruptedCount ? `已恢复记录，其中 ${interruptedCount} 条需核对账单` : `已恢复 ${state.generationEntries.length} 条生成记录`);
+      showToast(interruptedCount
+        ? `已恢复记录，其中 ${interruptedCount} 条需核对账单`
+        : resumedSubmissionCount
+          ? `已恢复记录，${resumedSubmissionCount} 条继续排队提交`
+          : `已恢复 ${state.generationEntries.length} 条生成记录`);
     }
     resumePendingImageCleanup();
   } catch {
@@ -3125,7 +3616,7 @@ async function restoreGenerationHistory() {
 }
 
 function resumePendingGenerationTasks() {
-  enqueueGenerationEntries(state.generationEntries.filter((entry) => entry.status === "loading" && entry.taskId));
+  enqueueGenerationEntries(state.generationEntries.filter((entry) => entry.status === "loading" && (entry.taskId || ["pending_submission", "retry_wait"].includes(entry.taskStatus))));
 }
 
 function showToast(message, action) {
@@ -3507,9 +3998,12 @@ async function submitSelected() {
       referenceUsage,
       referenceImageCacheKey,
       createdAt: time,
+      queuedAt: batchCreatedAt,
+      submittedAt: "",
       startedAt: batchCreatedAt,
       completedAt: "",
       status: "loading",
+      taskStatus: "pending_submission",
       favorite: false
     }));
     state.generationEntries = [...entries, ...state.generationEntries];
@@ -3656,12 +4150,7 @@ function handleGenerationAction(event) {
     return;
   }
   if (button.dataset.action === "download-image") {
-    const link = document.createElement("a");
-    link.href = entry.imageUrl;
-    link.download = createImageDownloadName(entry);
-    link.rel = "noopener";
-    link.click();
-    showToast("已开始下载图片");
+    void handleSaveGeneratedImage(entry);
     return;
   }
   if (button.dataset.action === "retry-image-cache") {
@@ -3924,6 +4413,97 @@ async function loadSavedApiSettings() {
   fillApiSettingsForm(state.apiSettings || {});
 }
 
+async function loadSavedOutputSettings() {
+  const saved = await loadOutputSettings().catch(() => null);
+  state.outputSettings = normalizeOutputSettings(saved || {});
+}
+
+function setOutputSettingsError(message = "") {
+  const error = $("outputSettingsError");
+  if (!error) return;
+  error.textContent = message;
+  error.classList.toggle("hidden", !message);
+}
+
+function openOutputSettings() {
+  outputSettingsDraft = normalizeOutputSettings(state.outputSettings);
+  setOutputSettingsError("");
+  renderOutputDirectoryStatus(outputSettingsDraft, isOutputDirectoryHandle(outputSettingsDraft.directoryHandle) ? "checking" : "");
+  showDialogAtTop(outputSettingsDialog);
+  void refreshOutputDirectoryStatus(outputSettingsDraft);
+  $("chooseOutputDirectoryBtn").focus();
+}
+
+function closeOutputSettings() {
+  outputSettingsDraft = null;
+  outputSettingsDialog.close();
+}
+
+async function chooseOutputDirectory() {
+  const draft = outputSettingsDraft || normalizeOutputSettings(state.outputSettings);
+  outputSettingsDraft = draft;
+  const button = $("chooseOutputDirectoryBtn");
+  button.disabled = true;
+  button.textContent = "正在授权…";
+  setOutputSettingsError("");
+  try {
+    if (isOutputDirectoryHandle(draft.directoryHandle)) {
+      const permission = await requestOutputDirectoryPermission(draft.directoryHandle);
+      if (permission === "granted") {
+        renderOutputDirectoryStatus(draft, permission);
+        return;
+      }
+    }
+    if (!canUseOutputDirectoryPicker()) throw new Error("当前浏览器不支持选择输出目录");
+    const handle = await window.showDirectoryPicker({ mode: "readwrite" });
+    if (!isOutputDirectoryHandle(handle)) throw new Error("未获得有效的输出目录授权");
+    draft.directoryHandle = handle;
+    draft.directoryName = String(handle.name || "已选择目录").trim();
+    draft.autoSaveEnabled = true;
+    renderOutputDirectoryStatus(draft, "checking");
+    await refreshOutputDirectoryStatus(draft);
+  } catch (error) {
+    if (error?.name !== "AbortError") setOutputSettingsError(error.message || "输出目录选择失败，请重试");
+  } finally {
+    button.disabled = false;
+    renderOutputDirectoryStatus(draft, isOutputDirectoryHandle(draft.directoryHandle) ? await getOutputDirectoryPermission(draft.directoryHandle) : "");
+  }
+}
+
+async function saveOutputSettingsDraft() {
+  const draft = normalizeOutputSettings(outputSettingsDraft || state.outputSettings);
+  setOutputSettingsError("");
+  if (draft.autoSaveEnabled && !isOutputDirectoryHandle(draft.directoryHandle)) {
+    setOutputSettingsError("启用自动保存前，请先选择输出目录。");
+    $("chooseOutputDirectoryBtn").focus();
+    return;
+  }
+  if (draft.autoSaveEnabled) {
+    const permission = await getOutputDirectoryPermission(draft.directoryHandle);
+    if (permission !== "granted") {
+      setOutputSettingsError("输出目录尚未授权，请先点击“选择目录”完成授权。");
+      await refreshOutputDirectoryStatus(draft);
+      $("chooseOutputDirectoryBtn").focus();
+      return;
+    }
+  }
+  const button = $("saveOutputSettingsBtn");
+  button.disabled = true;
+  button.textContent = "保存中…";
+  try {
+    await saveOutputSettings(draft);
+    state.outputSettings = draft;
+    outputSettingsDraft = null;
+    outputSettingsDialog.close();
+    showToast(state.outputSettings.autoSaveEnabled ? `已启用自动保存 · ${state.outputSettings.directoryName}` : "输出设置已保存");
+  } catch (error) {
+    setOutputSettingsError(error.message || "输出设置保存失败，请检查浏览器存储权限");
+  } finally {
+    button.disabled = false;
+    button.textContent = "保存设置";
+  }
+}
+
 function clearApiBaseUrlError(kind) {
   $(`${kind}BaseUrlInput`).removeAttribute("aria-invalid");
   $(`${kind}BaseUrlError`).classList.add("hidden");
@@ -4072,6 +4652,7 @@ $("submitSelectedBtn").addEventListener("click", submitSelected);
 $("selectAllBtn").addEventListener("click", selectAllPrompts);
 $("completeDirectionsBtn").addEventListener("click", completeMissingDirections);
 $("resetBtn").addEventListener("click", openResetDialog);
+$("outputSettingsBtn").addEventListener("click", openOutputSettings);
 $("apiSettingsBtn").addEventListener("click", () => {
   fillApiSettingsForm(state.apiSettings || {});
   clearApiBaseUrlErrors();
@@ -4094,6 +4675,16 @@ $("testApiConnectionBtn").addEventListener("click", testApiConnections);
 $("clearApiSettingsBtn").addEventListener("click", openClearApiSettingsDialog);
 $("cancelClearApiSettingsBtn").addEventListener("click", cancelClearApiSettings);
 $("confirmClearApiSettingsBtn").addEventListener("click", clearBrowserApiSettings);
+$("cancelOutputSettingsBtn").addEventListener("click", closeOutputSettings);
+$("chooseOutputDirectoryBtn").addEventListener("click", chooseOutputDirectory);
+$("saveOutputSettingsBtn").addEventListener("click", saveOutputSettingsDraft);
+$("outputAutoSaveInput").addEventListener("change", (event) => {
+  if (!outputSettingsDraft) return;
+  outputSettingsDraft.autoSaveEnabled = event.target.checked;
+  setOutputSettingsError("");
+  void refreshOutputDirectoryStatus(outputSettingsDraft);
+});
+outputSettingsDialog.addEventListener("close", () => { outputSettingsDraft = null; });
 $("historyManageBtn").addEventListener("click", openHistoryDialog);
 $("historyKeepCount").addEventListener("change", (event) => syncHistoryCleanupState(Number(event.target.value)));
 $("cleanupHistoryBtn").addEventListener("click", cleanupOldHistory);
@@ -4112,6 +4703,7 @@ document.querySelectorAll("[data-dialog-close]").forEach((button) => {
     if (dialog === retryGenerationDialog) closeRetryGenerationDialog();
     else if (dialog === imageRecoveryOptionsDialog) closeImageRecoveryOptions();
     else if (dialog === clearApiSettingsDialog) cancelClearApiSettings();
+    else if (dialog === outputSettingsDialog) closeOutputSettings();
     else if (dialog === editSetupDialog) closeEditSetupDialog();
     else if (dialog === batchSubmissionDialog) closeBatchSubmission();
     else dialog?.close();
@@ -4202,7 +4794,7 @@ setActiveStage("setupStage");
 renderPromptCards();
 renderGenerationFeed();
 renderLastImageDiagnostic();
-loadSavedApiSettings().then(async () => {
+Promise.all([loadSavedApiSettings(), loadSavedOutputSettings()]).then(async () => {
   checkImageService();
   registerGeneratedImageServiceWorker()?.catch(() => {});
   await restoreGenerationHistory();
@@ -4211,5 +4803,8 @@ loadSavedApiSettings().then(async () => {
 updateActiveStageFromScroll();
 setBlueprintCollapsed(window.matchMedia("(max-width: 600px)").matches);
 window.setInterval(updateGenerationElapsed, 1000);
+window.addEventListener("storage", (event) => {
+  if (event.key === GLOBAL_RATE_LIMIT_KEY) pumpGenerationQueue();
+});
 
 })();
