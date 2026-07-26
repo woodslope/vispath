@@ -1227,9 +1227,8 @@ let historySaveQueue = Promise.resolve();
 const generationQueue = [];
 const scheduledGenerationIds = new Set();
 let activeGenerationCount = 0;
-let activeSyncGenerationCount = 0;
-let asyncGenerationConcurrency = 2;
-let asyncGenerationConcurrencyRestoreTimer = 0;
+let generationConcurrency = 2;
+let generationConcurrencyRestoreTimer = 0;
 let imageCacheQueue = Promise.resolve();
 let historyImageCacheQueue = Promise.resolve();
 let outputSaveQueue = Promise.resolve();
@@ -1244,10 +1243,9 @@ const IMAGE_CLEANUP_DELAY = 5500;
 const IMAGE_POLL_INTERVAL = 3000;
 const IMAGE_POLL_MAX_ATTEMPTS = 120;
 const IMAGE_RETRY_DELAYS = [5000, 15000];
-const IMAGE_ASYNC_CONCURRENCY = 2;
+const IMAGE_GENERATION_CONCURRENCY = 2;
 const IMAGE_RATE_LIMIT_COOLDOWN = 60000;
 const GLOBAL_GENERATION_SLOT_NAMES = ["vispath-image-slot-1", "vispath-image-slot-2"];
-const GLOBAL_GENERATION_SYNC_LOCK = "vispath-image-sync-coordinator";
 const GLOBAL_GENERATION_ENTRY_LOCK_PREFIX = "vispath-image-entry:";
 const GLOBAL_RATE_LIMIT_KEY = "vispath-image-rate-limit-until";
 const imageCleanupTimers = new Map();
@@ -2941,13 +2939,13 @@ async function runGeneration(entry) {
 
 function reduceGenerationConcurrencyAfterRateLimit() {
   const rateLimitUntil = Date.now() + IMAGE_RATE_LIMIT_COOLDOWN;
-  asyncGenerationConcurrency = 1;
+  generationConcurrency = 1;
   try {
     localStorage.setItem(GLOBAL_RATE_LIMIT_KEY, String(rateLimitUntil));
   } catch {}
-  window.clearTimeout(asyncGenerationConcurrencyRestoreTimer);
-  asyncGenerationConcurrencyRestoreTimer = window.setTimeout(() => {
-    asyncGenerationConcurrency = IMAGE_ASYNC_CONCURRENCY;
+  window.clearTimeout(generationConcurrencyRestoreTimer);
+  generationConcurrencyRestoreTimer = window.setTimeout(() => {
+    generationConcurrency = IMAGE_GENERATION_CONCURRENCY;
     try {
       if (Number(localStorage.getItem(GLOBAL_RATE_LIMIT_KEY)) <= Date.now()) localStorage.removeItem(GLOBAL_RATE_LIMIT_KEY);
     } catch {}
@@ -2955,12 +2953,12 @@ function reduceGenerationConcurrencyAfterRateLimit() {
   }, IMAGE_RATE_LIMIT_COOLDOWN);
 }
 
-function getEffectiveAsyncGenerationConcurrency() {
+function getEffectiveGenerationConcurrency() {
   let sharedRateLimitUntil = 0;
   try {
     sharedRateLimitUntil = Number(localStorage.getItem(GLOBAL_RATE_LIMIT_KEY)) || 0;
   } catch {}
-  return sharedRateLimitUntil > Date.now() ? 1 : asyncGenerationConcurrency;
+  return sharedRateLimitUntil > Date.now() ? 1 : generationConcurrency;
 }
 
 function canUseCrossTabGenerationLocks() {
@@ -2992,9 +2990,9 @@ async function runWithCrossTabEntryLock(entry, action) {
   });
 }
 
-async function runWithCrossTabAsyncSlot(entry, action) {
+async function runWithCrossTabGenerationSlot(entry, action) {
   while (entry.status === "loading") {
-    const slotNames = GLOBAL_GENERATION_SLOT_NAMES.slice(0, getEffectiveAsyncGenerationConcurrency());
+    const slotNames = GLOBAL_GENERATION_SLOT_NAMES.slice(0, getEffectiveGenerationConcurrency());
     for (const slotName of slotNames) {
       let acquired = false;
       let result;
@@ -3011,26 +3009,19 @@ async function runWithCrossTabAsyncSlot(entry, action) {
 
 function runWithCrossTabGenerationLock(entry, action) {
   if (!canUseCrossTabGenerationLocks()) return action();
-  if (entry.generationMode !== "sync") return runWithCrossTabAsyncSlot(entry, action);
-  return navigator.locks.request(GLOBAL_GENERATION_SYNC_LOCK, () =>
-    navigator.locks.request(GLOBAL_GENERATION_SLOT_NAMES[0], () =>
-      navigator.locks.request(GLOBAL_GENERATION_SLOT_NAMES[1], () => runWithCrossTabEntryLock(entry, action))));
+  return runWithCrossTabGenerationSlot(entry, action);
 }
 
 function startQueuedGeneration(entry) {
-  const isSync = entry.generationMode === "sync";
   activeGenerationCount += 1;
-  if (isSync) activeSyncGenerationCount += 1;
   void runWithCrossTabGenerationLock(entry, () => runGeneration(entry)).finally(() => {
     activeGenerationCount -= 1;
-    if (isSync) activeSyncGenerationCount -= 1;
     scheduledGenerationIds.delete(entry.id);
     pumpGenerationQueue();
   });
 }
 
 function pumpGenerationQueue() {
-  if (activeSyncGenerationCount > 0) return;
   while (generationQueue.length) {
     const entry = generationQueue[0];
     if (entry.status !== "loading") {
@@ -3038,13 +3029,7 @@ function pumpGenerationQueue() {
       scheduledGenerationIds.delete(entry.id);
       continue;
     }
-    if (entry.generationMode === "sync") {
-      if (activeGenerationCount > 0) return;
-      generationQueue.shift();
-      startQueuedGeneration(entry);
-      return;
-    }
-    if (activeGenerationCount >= getEffectiveAsyncGenerationConcurrency()) return;
+    if (activeGenerationCount >= getEffectiveGenerationConcurrency()) return;
     generationQueue.shift();
     startQueuedGeneration(entry);
   }

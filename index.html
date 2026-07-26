@@ -264,15 +264,15 @@
           <label class="form-field" for="imageBaseUrlInput"><span class="form-field-label-row"><span>API 地址</span><small id="imageBaseUrlHint">填写到 /v1</small></span><input id="imageBaseUrlInput" type="url" placeholder="https://image-api.example/v1" aria-describedby="imageBaseUrlHint imageBaseUrlError"><small class="field-error hidden" id="imageBaseUrlError" role="alert">填写生图 API Key 时必须同时填写地址。</small></label>
           <div class="form-field"><label for="imageApiKeyInput">API Key</label><span class="api-key-control"><input id="imageApiKeyInput" type="password" autocomplete="off"><button class="api-key-visibility" id="imageApiKeyVisibilityBtn" type="button" data-api-key-input="imageApiKeyInput" data-api-key-name="生图" aria-controls="imageApiKeyInput" aria-pressed="false" aria-label="显示生图 API Key">显示</button></span></div>
           <label class="form-field" for="imageModelInput"><span>模型</span><input id="imageModelInput" type="text" value="gpt-image-2"></label>
-          <label class="form-field" for="imageGenerationModeInput"><span>生成方式</span><span class="select-control"><select id="imageGenerationModeInput"><option value="sync" selected>同步图片生成</option><option value="async">异步图片生成</option></select></span></label>
+          <label class="form-field" for="imageGenerationModeInput"><span>生成方式</span><span class="select-control"><select id="imageGenerationModeInput" aria-describedby="imageGenerationModeHint"><option value="sync" selected>同步稳定生成 · 并发 2</option><option value="async">异步快速预览</option></select></span><small class="field-hint" id="imageGenerationModeHint">同步模式优先返回 Base64，返回 Base64 时可自动保存；异步模式若返回跨域 URL，可能只能预览、无法自动保存。</small></label>
         </section>
         </div>
         <details class="api-protocol-summary" id="apiProtocolSummary">
         <summary><strong>固定接口规则</strong><span>· Responses · 同步 / 异步 · 自动查询</span></summary>
         <dl>
           <div><dt>文字协议</dt><dd>Responses · 非流式 · <code>/responses</code></dd></div>
-          <div><dt>同步图片</dt><dd><code>/images/generations</code> / <code>/images/edits</code> · 直接读取结果</dd></div>
-          <div><dt>异步图片</dt><dd><code>/images/generations/async</code> / <code>/images/edits/async</code> · 返回 task_id</dd></div>
+          <div><dt>同步图片</dt><dd><code>/images/generations</code> / <code>/images/edits</code> · 最多并发 2 · 直接读取结果</dd></div>
+          <div><dt>异步图片</dt><dd><code>/images/generations/async</code> / <code>/images/edits/async</code> · 返回 task_id · 异步 URL 可能无法自动保存</dd></div>
           <div><dt>任务查询</dt><dd><code>/images/tasks/{task_id}</code> · 自动轮询</dd></div>
           <div><dt>图片格式</dt><dd>默认请求 Base64 · 自动兼容 URL / Base64，以实际响应为准</dd></div>
           <div><dt>连接要求</dt><dd>中转站需允许浏览器 CORS 请求</dd></div>
@@ -310,7 +310,7 @@
         <div class="title-pair dialog-title">
           <span class="step-label">LOCAL OUTPUT</span>
           <h2 id="outputSettingsTitle">输出设置</h2>
-          <small class="dialog-meta">同步和异步图片都可自动保存到选定目录</small>
+          <small class="dialog-meta">同步 Base64 可自动保存；异步 URL 受中转站跨域限制</small>
         </div>
         <button class="icon-button dialog-close" type="button" data-dialog-close aria-label="关闭输出设置" title="关闭输出设置"><svg class="ui-icon" viewBox="0 0 48 48" aria-hidden="true"><path d="M14 14L34 34M34 14L14 34" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       </div>
@@ -520,6 +520,6 @@
 
   <input id="imageRecoveryFileInput" type="file" accept="image/png,image/jpeg,image/webp" hidden>
   <div class="toast" id="toast" role="status"></div>
-  <script src="app.bundle.js?v=1b75f3deb9d1"></script>
+  <script src="app.bundle.js?v=2ee8951dc3d1"></script>
 </body>
 </html>
