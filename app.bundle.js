@@ -2891,7 +2891,7 @@ async function checkImageService() {
   const textReady = hasBrowserTextApi();
   const imageReady = hasBrowserImageApi();
   status.classList.toggle("is-offline", !textReady && !imageReady);
-  label.textContent = textReady && imageReady ? "浏览器 API 已配置" : textReady ? "文本 API 已配置" : imageReady ? "生图 API 已配置" : "请先配置 API";
+  label.textContent = textReady && imageReady ? "API 已配置" : textReady ? "文本 API 已配置" : imageReady ? "生图 API 已配置" : "请先配置 API";
 }
 
 async function runGeneration(entry) {
