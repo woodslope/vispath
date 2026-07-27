@@ -578,6 +578,7 @@ body:has(#promptStage.is-stage-active) .toast { bottom: calc(var(--toast-block-i
   .prompt-column.is-stage-active .workbench-panel { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; min-height: 0; height: 100%; overflow: hidden; }
   .prompt-scroll-region, .result-scroll-region { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
   .prompt-scroll-region .prompt-list { min-height: 100%; align-content: start; padding-bottom: 16px; }
+  .prompt-scroll-region .prompt-list:empty { min-height: 0; padding-bottom: 0; }
   .prompt-column .submission-bar { position: static; margin: 0 -16px -16px; }
   .results-column.is-stage-active { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-height: 0; overflow: hidden; }
   .empty-board { max-width: 960px; margin-inline: auto; }
@@ -593,9 +594,11 @@ body:has(#promptStage.is-stage-active) .toast { bottom: calc(var(--toast-block-i
   .desktop-required-owner { margin-top: 12px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, monospace; font-size: 10px; line-height: 1.4; }
 }
 @media (min-width: 1180px) {
-  :root { --result-grid-columns: 4; }
   .prompt-list[data-count="3"], .prompt-list[data-count="5"], .prompt-list[data-count="6"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .result-toolbar { grid-template-columns: minmax(300px, .68fr) minmax(0, 1.32fr); align-items: start; }
+}
+@media (min-width: 1200px) {
+  :root { --result-grid-columns: 4; }
 }
 @media (min-width: 1540px) {
   :root { --result-grid-columns: 5; }

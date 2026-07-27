@@ -1,0 +1,26 @@
+{
+  "name": "儿童乐园水上活动海报视觉探索样本",
+  "sourcePrompt": "为儿童乐园做一张夏季活动草坪公园里的水上乐园海报，主体是孩子们奔向乐园大门，扭头让家长快跟上。",
+  "styles": [
+    { "option": "极简编辑感", "image": "01-editorial.png" },
+    { "option": "复古印刷感", "image": "02-retro-print.png" },
+    { "option": "未来科技感", "image": "03-future-tech.png" },
+    { "option": "生活方式摄影感", "image": "04-lifestyle-photo.png" },
+    { "option": "瑞士网格感", "image": "05-swiss-grid.png" },
+    { "option": "实验拼贴感", "image": "06-experimental-collage.png" }
+  ],
+  "styleAnchors": {
+    "未来科技感": {
+      "referenceImage": "03-future-tech.png",
+      "adjustedImage": "03-future-tech-current.png",
+      "mustInclude": ["深蓝至蓝紫夜景", "青紫霓虹光轨", "巨型中心对称未来水上乐园入口", "玻璃与金属硬表面", "全息 UI 面板"],
+      "avoid": ["白天自然摄影", "普通透明水滑道", "少量青色 HUD"]
+    }
+  },
+  "mustPreserve": [
+    { "id": "action-destination", "text": "孩子们奔向水上乐园大门" },
+    { "id": "turn-back-interaction", "text": "孩子们回头呼喊家长快跟上" },
+    { "id": "depth-axis", "text": "前景家长回应，中景孩子奔跑，背景水上乐园大门作为目的地" },
+    { "id": "poster-hierarchy", "text": "上方标题区，中部主体视觉，下方活动信息区" }
+  ]
+}

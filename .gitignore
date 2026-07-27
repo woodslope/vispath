@@ -6,28 +6,10 @@
 node_modules/
 generated/
 
-XIAOBAI_三步体验升级方向.md
-docs/XIAOBAI_ACCEPTANCE_RECORD_*.md
-docs/PROMPT_BLUEPRINT.md
-PRODUCT_SPEC.md
-package.json
-pnpm-lock.yaml
-tests/
-
 *.log
 *.tmp
 *.bak
 exports/
-
-server.mjs
-tests/generated-image-delete.mjs
-
-# Local source and collaboration files; GitHub keeps only the display build.
-AGENTS.md
-DESIGN_SYSTEM.md
-UI_STYLE_GUIDE.md
-app.js
-scripts/
-src/
 screenshots/
+experiments/
 vispath/

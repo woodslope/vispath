@@ -1,0 +1,21 @@
+{
+  "name": "vispath",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:browser": "node scripts/build-browser-bundle.mjs",
+    "test": "node scripts/run-tests.mjs",
+    "test:api-connection": "node tests/api-connection-test.mjs",
+    "test:batch-submission": "node tests/batch-submission.mjs",
+    "test:design-system": "node tests/design-system-contract.mjs",
+    "test:file-open": "node tests/file-open.mjs",
+    "test:generation-queue": "node tests/generation-queue.mjs",
+    "test:generation-timing": "node tests/generation-timing.test.mjs",
+    "test:output-settings": "node tests/output-settings.mjs",
+    "test:toast-position": "node tests/toast-position.mjs",
+    "test:experience": "node tests/experience-smoke.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.55.0"
+  }
+}
