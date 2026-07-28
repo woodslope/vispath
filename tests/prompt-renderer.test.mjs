@@ -5,7 +5,7 @@ import {
   getBlueprintMaxOutputTokens,
   normalizeBlueprintResponse
 } from "../src/prompt-renderer.js";
-import { EXPLORATION_DIMENSIONS, TASK_TYPES, getExplorationGuidance } from "../src/prompt-blueprint.js";
+import { CONTENT_MODES, EXPLORATION_DIMENSIONS, TASK_TYPES, getExplorationGuidance } from "../src/prompt-blueprint.js";
 
 const baseInput = {
   prompt: "为咖啡品牌 NORTH 做夏日开业海报，指定文案：SUMMER OPENING，16:9",
@@ -262,10 +262,131 @@ assert.match(conceptPosterInstructions, /海报方案要明确主体、传播目
 assert.doesNotMatch(conceptPosterInstructions, /内容模式：概念补全|prompt.*保持简洁|逐项列清单/, "首次概念探索不应被新增的工作流规则压缩");
 assert.doesNotMatch(conceptPosterInstructions, /视觉方向提案|视觉母题|设计机制|3[—\-]5 个场景锚点/, "概念模式不应把设计方法论写入生图任务");
 
+const characterIpType = TASK_TYPES.find((taskType) => taskType.id === "character_ip");
+const characterStyleDimension = EXPLORATION_DIMENSIONS.find((dimension) => dimension.id === "character_style");
+assert(characterIpType, "卡通 / IP 形象任务类型缺失");
+assert(characterStyleDimension, "卡通 / 角色风格探索维度缺失");
+assert.match(CONTENT_MODES.find((mode) => mode.id === "concept")?.description || "", /角色参考图可推断画面外/, "概念补全说明未告知角色参考图扩展行为");
+assert.match(CONTENT_MODES.find((mode) => mode.id === "factual")?.description || "", /默认不补造画面外/, "事实保守说明未告知角色参考图边界");
+assert.match(characterStyleDimension.description, /轮廓简化.*五官概括.*适度造型夸张/, "角色风格必须允许形成可见 IP 造型差异");
+assert.equal(characterStyleDimension.dynamicOptions, true, "角色风格应由模型直接生成方向，而不是要求用户先选风格组");
+assert.deepEqual(characterStyleDimension.optionCounts, [2, 3, 4, 5, 6, 8, 10], "角色风格应支持 8 套和 10 套探索");
+const characterStyleGuidance = getExplorationGuidance(characterStyleDimension, characterStyleDimension.defaultOptions);
+assert.deepEqual(Object.keys(characterStyleGuidance), characterStyleDimension.defaultOptions, "六种角色风格必须分别提供造型锚点");
+assert.match(characterStyleGuidance["Q版卡通 2D"], /3 至 4 头身.*适合继续扩展日常场景/, "Q版卡通缺少内容配图延展约束");
+assert.match(characterStyleGuidance["Q版表情包 IP"], /大头小身.*丰富表情空间/, "Q版表情包缺少表情扩展约束");
+assert.match(characterStyleGuidance["软胶潮玩 3D"], /软胶潮玩.*小红书封面主视觉/, "软胶潮玩缺少封面使用场景");
+assert.match(characterStyleGuidance["扁平知识漫画"], /教程和知识文章.*标题、箭头、步骤卡片/, "扁平知识漫画缺少教程配图约束");
+assert.match(characterStyleGuidance["手帐贴纸角色"], /小红书笔记.*白边贴纸轮廓/, "手帐贴纸角色缺少笔记封面特征");
+const generalIpOptions = ["2D 扁平插画", "3D 潮玩", "黏土软质感", "绘本卡通", "几何吉祥物", "手绘线稿"];
+const generalIpGuidance = getExplorationGuidance(characterStyleDimension, generalIpOptions);
+assert.match(generalIpGuidance["黏土软质感"], /手工捏塑.*黏土体块/, "通用组丢失黏土方向");
+assert.match(generalIpGuidance["手绘线稿"], /粗细变化.*手作节奏/, "通用组丢失线稿方向");
+
+const characterStyleOptions = characterStyleDimension.defaultOptions.slice(0, 4);
+const characterStyleInput = {
+  ...baseInput,
+  prompt: "根据上传照片生成全身人物 IP",
+  taskTypeId: characterIpType.id,
+  taskTypeName: characterIpType.name,
+  promptProfile: characterIpType.promptProfile,
+  requiredFields: characterIpType.requiredFields,
+  dimensionId: characterStyleDimension.id,
+  dimensionName: characterStyleDimension.name,
+  dimensionDescription: characterStyleDimension.description,
+  lockFields: characterStyleDimension.lockFields,
+  explorationOptions: characterStyleOptions,
+  explorationGuidance: getExplorationGuidance(characterStyleDimension, characterStyleOptions),
+  dynamicExploration: true,
+  optionCount: characterStyleOptions.length,
+  ratio: characterIpType.defaultRatio,
+  referenceUsage: "explore"
+};
+const characterStyleInstructions = createBlueprintInstructions(characterStyleInput);
+assert.match(characterStyleInstructions, /locked\.subject 只记录.*身份锚点.*不得把真人皮肤纹理.*正常人体比例.*写成固定条件/, "角色身份锁定范围不应压制卡通化");
+assert.match(characterStyleInstructions, /缩略图和无标签状态下仍清楚可辨/, "角色风格差异必须具备可见验收标准");
+assert.match(characterStyleInstructions, /定性比例夸张.*精确头身比.*角色比例/, "角色风格与角色比例维度缺少清楚边界");
+assert.match(characterStyleInstructions, /角色参考图范围规则（概念补全）.*半身.*允许.*合理补足画面外身体/, "概念补全未允许合理扩展半身角色参考图");
+
+const characterStyleResponse = {
+  locked: {
+    intent: "将参考人物转化为个人 IP 角色",
+    subject: "成年东亚男性，短黑发，白色长袖衬衫，黑色长裤与黑鞋",
+    composition: "正面全身站姿，双手插袋",
+    constraints: []
+  },
+  variants: characterStyleOptions.map((targetOption) => ({
+    title: targetOption,
+    targetOption,
+    changeSummary: `将人物完整转化为${targetOption}`,
+    prompt: `以图片1人物为参考，保留修长匀称的真实身材和精细衣物褶皱，仅将表面处理为${targetOption}`
+  }))
+};
+const characterStyleNormalized = normalizeBlueprintResponse(characterStyleResponse, characterStyleInput);
+characterStyleNormalized.variants.forEach((variant) => {
+  assert.match(variant.prompt, /^以图片1作为角色身份参考，而不是需要保真的照片底稿/, `${variant.title}仍使用通用照片保真前缀`);
+  assert(variant.prompt.includes(`当前风格造型锚点：${characterStyleGuidance[variant.explorationOption]}`), `${variant.title}未确定性追加对应造型锚点`);
+  assert.match(variant.prompt, /角色风格转换要求（优先级高于通用主体保留）/, `${variant.title}缺少覆盖写实保留条件的最终约束`);
+  assert.match(variant.prompt, /不得保留或复刻写实摄影光影.*真人皮肤纹理.*正常比例数字人观感/, `${variant.title}缺少统一防写实约束`);
+  assert.match(variant.prompt, /角色参考图补全要求（概念补全）.*半身.*允许.*合理推断画面外的身体/, `${variant.title}缺少概念补全的参考图范围约束`);
+  assert.doesNotMatch(variant.prompt, /保留未被指定改变的主体身份、核心造型/, `${variant.title}不应继续使用通用核心造型保留话术`);
+});
+
+const dynamicCharacterOptions = ["Q版卡通 2D", "Q版表情包 IP", "软胶潮玩 3D", "扁平知识漫画", "手帐贴纸角色", "温柔绘本角色", "黏土软质感", "手绘线稿"];
+const dynamicCharacterInput = {
+  ...characterStyleInput,
+  explorationOptions: [],
+  explorationGuidance: {},
+  optionCount: dynamicCharacterOptions.length,
+  dynamicExploration: true
+};
+const dynamicCharacterInstructions = createBlueprintInstructions(dynamicCharacterInput);
+assert.match(dynamicCharacterInstructions, /自行命名彼此不同.*角色风格 targetOption/, "角色风格动态探索未要求模型直接命名方向");
+assert.match(dynamicCharacterInstructions, /小红书封面.*教程讲解.*知识文章.*社媒内容.*表情包/, "角色风格动态探索未识别内容创作用途");
+assert.match(dynamicCharacterInstructions, /角色风格多样性规则：8 套方案必须分属 8 个不同的角色视觉家族/, "角色风格动态探索缺少跨家族多样性约束");
+const dynamicCharacterResponse = {
+  locked: structuredClone(characterStyleResponse.locked),
+  variants: dynamicCharacterOptions.map((targetOption) => ({
+    title: targetOption,
+    targetOption,
+    changeSummary: `采用${targetOption}完成角色重绘`,
+    prompt: `将图片1人物重绘为${targetOption}，保留短黑发、白衬衫和黑色长裤。`
+  }))
+};
+const dynamicCharacterNormalized = normalizeBlueprintResponse(dynamicCharacterResponse, dynamicCharacterInput);
+assert.deepEqual(dynamicCharacterNormalized.exploration.selectedOptions, dynamicCharacterOptions, "角色动态探索应保留模型返回的 8 个不同方向");
+
+const factualHalfBodyInput = {
+  ...characterStyleInput,
+  contentMode: "factual",
+  prompt: "将上传的半身照片转换为卡通角色，保持半身取景"
+};
+const factualHalfBodyInstructions = createBlueprintInstructions(factualHalfBodyInput);
+assert.match(factualHalfBodyInstructions, /角色参考图范围规则（事实保守）.*头像.*半身.*全身/, "事实保守未要求识别参考图实际身体范围");
+assert.match(factualHalfBodyInstructions, /默认保持相同取景和身体范围.*不得把照片边界外不可见/, "事实保守未禁止扩展参考图外内容");
+assert.match(factualHalfBodyInstructions, /仅写“做成全身”.*仍不得自行补造/, "事实保守的显式补全例外缺少信息完整性要求");
+const factualHalfBodyResponse = structuredClone(characterStyleResponse);
+factualHalfBodyResponse.locked.composition = "正面半身取景，仅显示头部、上半身和部分手臂";
+factualHalfBodyResponse.variants = characterStyleOptions.map((targetOption) => ({
+  title: targetOption,
+  targetOption,
+  changeSummary: `将可见半身转换为${targetOption}`,
+  prompt: `以图片1半身人物为参考，尝试补成完整全身角色并使用${targetOption}`
+}));
+const factualHalfBodyNormalized = normalizeBlueprintResponse(factualHalfBodyResponse, factualHalfBodyInput);
+factualHalfBodyNormalized.variants.forEach((variant) => {
+  assert.match(variant.prompt, /角色参考图取景要求（事实保守，优先级高于全身构图）/, `${variant.title}缺少事实保守最终取景约束`);
+  assert.match(variant.prompt, /头像保持头像，半身保持半身，不得擅自扩展为全身/, `${variant.title}未禁止半身照自动补成全身`);
+  assert.match(variant.prompt, /只有用户在文字中明确要求补全，并同时明确提供缺失部分/, `${variant.title}缺少允许补全的完整条件`);
+  assert.doesNotMatch(variant.prompt, /使用正面全身、中远景构图/, `${variant.title}仍被通用全身构图规则覆盖`);
+});
+
 const waterParkSample = JSON.parse(readFileSync(new URL("./fixtures/water-park-exploration/sample-manifest.json", import.meta.url), "utf8"));
 const visualStyleDimension = EXPLORATION_DIMENSIONS.find((dimension) => dimension.id === "visual_style");
 assert(visualStyleDimension, "设计风格探索维度缺失");
 assert.deepEqual(visualStyleDimension.defaultOptions, waterParkSample.styles.map((style) => style.option), "六张样本图的风格选项必须保持固定顺序");
+assert.equal(visualStyleDimension.dynamicOptions, true, "海报设计风格应由模型按任务直接生成方向");
+assert.deepEqual(visualStyleDimension.optionCounts, [2, 3, 4, 5, 6, 8, 10], "海报设计风格应支持 8 套和 10 套探索");
 assert(visualStyleDimension.lockFields.includes("composition"), "设计风格探索必须锁住叙事构图关系");
 assert.deepEqual(Object.keys(getExplorationGuidance(visualStyleDimension, ["未来科技感", "复古印刷感"])), ["未来科技感"], "只有有样本语义的探索目标才应携带 guidance");
 waterParkSample.styles.forEach((style) => {

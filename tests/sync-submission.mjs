@@ -41,12 +41,15 @@ await page.route("**/responses", async (route) => {
   body: JSON.stringify({
     output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify({
       locked: { intent: "同步生图测试", subject: "玻璃杯" },
-      variants: requestInput.explorationOptions.map((targetOption, index) => ({
+      variants: (requestInput.explorationOptions.length
+        ? requestInput.explorationOptions
+        : Array.from({ length: requestInput.optionCount }, (_, index) => `动态视觉方向 ${index + 1}`))
+        .map((targetOption, index) => ({
         title: `同步方向${index + 1}`,
         targetOption,
         changeSummary: `验证${targetOption}同步提交`,
         prompt: `透明玻璃杯，横向构图，${targetOption}，方案${index + 1}`
-      }))
+        }))
     }) }] }]
   })
   });
@@ -105,7 +108,7 @@ try {
   assert.match(await page.locator("#blueprintPanel").textContent(), new RegExp(secondDimensionName), "切换探索变量后蓝图应立即同步");
   await page.locator("#optionCount").selectOption("2");
   await page.locator("#imageRatio").selectOption("16:9");
-  assert.match(await page.locator("#blueprintPanel").textContent(), /2 套方案/, "切换生成数量后蓝图应立即同步");
+  assert.match(await page.locator("#blueprintPanel").textContent(), /2 套(?:方案|不同方向)/, "切换生成数量后蓝图应立即同步");
   assert.match(await page.locator("#blueprintPanel").textContent(), /16:9/, "切换画幅比例后蓝图应立即同步");
   await page.locator("#generateBtn").click();
   assert.equal(await page.locator("#generateBtn").isDisabled(), true, "建立蓝图时生成按钮应置灰");
@@ -159,7 +162,7 @@ try {
   assert.equal(await page.locator("#optionCount").isEnabled(), true, "确认修改后应解锁生成设置");
   assert.equal(await page.locator(".generation-card").count(), 1, "确认修改不应删除已提交的图片结果");
   await page.locator("#optionCount").selectOption("3");
-  assert.match(await page.locator("#blueprintPanel").textContent(), /3 套方案/, "解锁后修改设置应立即更新蓝图");
+  assert.match(await page.locator("#blueprintPanel").textContent(), /3 套(?:方案|不同方向)/, "解锁后修改设置应立即更新蓝图");
   await page.locator("#resetBtn").click();
   await page.locator("#confirmResetBtn").click();
   await page.waitForFunction(() => !document.querySelector("#resetDialog")?.open);

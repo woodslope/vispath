@@ -83,6 +83,11 @@ try {
     document.querySelector(".result-scroll-region").scrollTop = 0;
   });
   await page.locator(".generation-card.is-error").first().waitFor({ state: "visible" });
+  await page.waitForFunction(() => {
+    const images = [...document.querySelectorAll(".generation-card img")];
+    return images.length > 0 && images.every((image) => image.complete && image.naturalWidth > 0);
+  });
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 
   const failureHierarchy = await page.locator(".generation-card.is-error").first().evaluate((card) => ({
     hasInlineErrorBlock: Boolean(card.querySelector(".generation-error")),

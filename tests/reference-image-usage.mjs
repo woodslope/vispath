@@ -50,7 +50,10 @@ await page.route("**/responses", (route) => {
   const requestBody = JSON.parse(route.request().postData() || "{}");
   const input = readBlueprintInput(requestBody);
   textRequests.push({ body: requestBody, input });
-  const variants = input.explorationOptions.map((targetOption, index) => ({
+  const targetOptions = input.explorationOptions.length
+    ? input.explorationOptions
+    : Array.from({ length: input.optionCount }, (_, index) => `动态视觉方向 ${index + 1}`);
+  const variants = targetOptions.map((targetOption, index) => ({
     title: `${targetOption}方向`,
     targetOption,
     changeSummary: `将${input.dimensionName}调整为${targetOption}`,
@@ -58,7 +61,7 @@ await page.route("**/responses", (route) => {
       ? `以图片1中的咖啡杯为主体，保留杯身造型，探索${targetOption}，方案${index + 1}`
       : `一只透明玻璃冰咖啡杯，木质桌面与自然侧光，探索${targetOption}，方案${index + 1}`
   }));
-  if (input.referenceUsage === "explore") failingExploreOption = input.explorationOptions[0];
+  if (input.referenceUsage === "explore") failingExploreOption = targetOptions[0];
   return route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({

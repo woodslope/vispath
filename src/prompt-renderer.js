@@ -53,6 +53,10 @@ const DIMENSION_CONSTRAINT_PATTERNS = Object.freeze({
 
 const REFERENCE_DEPENDENT_PATTERN = /参考图|原图|如图|上传(?:的)?图片|这张图|该图|上图|下图|该素材|这份素材|上述(?:图片|素材)|图片(?:中|里|内)|(?<!构)图(?:中|里)(?:的|所示|可见)|保持(?:图片|图中)|沿用(?:图片|图中)|沿用现有(?:主体|构图|配色|造型|风格)|参照(?:该|这份|上述)素材|(?:(?<!尤)其(?!他|次)|它(?:的)?|其中(?:的)?).{0,8}(?:配色|色彩|构图|造型|风格|主体|特征|轮廓|材质|光线|细节|内容)/;
 const REFERENCE_EXPLORE_COMPOSITION_GUARD = "构图安全要求（优先级高于参考图取景）：主体整体高度不得超过画布高度的 80%，顶部和底部各至少保留 8% 空白；主体必须完整落在画布安全区内，头顶、帽子、四肢、脚和其他重要配件不得被裁切或贴边；不要复制参考图的裁切边界或近距离取景；如参考图主体过大，必须缩小主体并使用正面全身、中远景构图，禁止特写、出框或贴边。";
+const CHARACTER_STYLE_REFERENCE_RULE = "以图片1作为角色身份参考，而不是需要保真的照片底稿。保留可识别身份锚点、发型轮廓、服装类别与主色、人物数量和基本姿态；当前角色风格必须明显重塑绘制媒介、外轮廓、五官简化、体块和材质。";
+const CHARACTER_STYLE_TRANSFORMATION_GUARD = "角色风格转换要求（优先级高于通用主体保留）：最终结果在不看方向名称时也必须能一眼识别当前卡通风格。不得保留或复刻写实摄影光影、真人皮肤纹理、精细布料褶皱、照片级五官和正常比例数字人观感；允许为当前风格适度概括脸型、放大或缩小五官与头手体块、简化人体轮廓，但不得改变人物身份、服装类别、主色和基本姿态。若用户明确指定了精确头身比，则仍以用户要求为准。";
+const CHARACTER_CONCEPT_REFERENCE_GUARD = "角色参考图补全要求（概念补全）：先识别图片1实际可见的取景范围。若参考图只展示头像、胸像或半身，允许在保持身份锚点和已见服装连续性的前提下，合理推断画面外的身体、基础服装、姿态与简单背景，将角色扩展为适合当前方案的完整构图；推断部分保持中性、简洁，不添加品牌、Logo、文字、独特配件或新的身份信息。若用户明确要求保持原取景，则不得扩展。主体和所有已生成的重要部位必须完整落在安全区内，不得贴边或意外裁切。";
+const CHARACTER_FACTUAL_REFERENCE_GUARD = "角色参考图取景要求（事实保守，优先级高于全身构图）：必须保留图片1实际可见的取景范围和身体范围；头像保持头像，半身保持半身，不得擅自扩展为全身，不得生成参考图外不可确认的下半身、手脚、服装、鞋子、配件、姿态或背景。只有用户在文字中明确要求补全，并同时明确提供缺失部分的服装、身体范围或姿态信息时，才可严格按这些已提供信息扩展；未说明的部分仍不得补造。可见主体必须完整落在画布安全区内，不得贴边或意外裁切。";
 const ASPECT_RATIO_PATTERN = /\b(?:1\s*[:：]\s*1|16\s*[:：]\s*9|9\s*[:：]\s*16|4\s*[:：]\s*3|3\s*[:：]\s*4|3\s*[:：]\s*2|2\s*[:：]\s*3|21\s*[:：]\s*9)\b/g;
 const ASPECT_CONTEXT_BEFORE_PATTERN = /(?:画幅|宽高比|纵横比|aspect\s*ratio|输出尺寸|输出比例|海报|封面|图片|图像|画面)[\s，,。；;:：-]*(?:为|是)?\s*$/i;
 const ASPECT_CONTEXT_AFTER_PATTERN = /^[\s，,。；;:：-]*(?:画幅|宽高比|纵横比|aspect\s*ratio|横版|竖版|方形|海报|封面|图片|图像|画面)/i;
@@ -213,27 +217,43 @@ function renderLockedSnapshot(snapshot, ratio) {
   return parts.join("\n");
 }
 
+function getReferenceExploreCompositionGuard(input) {
+  if (input.promptProfile !== "character-ip") return REFERENCE_EXPLORE_COMPOSITION_GUARD;
+  return normalizeContentMode(input.contentMode) === "factual"
+    ? CHARACTER_FACTUAL_REFERENCE_GUARD
+    : CHARACTER_CONCEPT_REFERENCE_GUARD;
+}
+
 function renderVariantPrompt({ rawPrompt, input, lockedSnapshot, explorationOption, changeSummary }) {
   const referenceUsage = normalizeReferenceUsage(input.referenceUsage);
+  const characterStyleExploration = input.dimensionId === "character_style";
+  const optionGuidance = cleanText(input.explorationGuidance?.[explorationOption]);
   const prompt = replaceAspectRatios(rawPrompt, input.ratio);
   const preserved = renderLockedSnapshot(lockedSnapshot, input.ratio);
   const segments = [];
   if (referenceUsage === "explore") {
-    segments.push("以图片1为视觉基础，保留未被指定改变的主体身份、核心造型与主要内容。 ");
+    segments.push(characterStyleExploration
+      ? CHARACTER_STYLE_REFERENCE_RULE
+      : "以图片1为视觉基础，保留未被指定改变的主体身份、核心造型与主要内容。 ");
   }
   segments.push(prompt);
   segments.push(`视觉方向：${explorationOption}。${changeSummary}。`);
+  if (characterStyleExploration && optionGuidance) {
+    segments.push(`当前风格造型锚点：${optionGuidance}`);
+  }
   if (preserved) {
     segments.push("必须保留：");
     segments.push(preserved);
   }
+  if (characterStyleExploration) segments.push(CHARACTER_STYLE_TRANSFORMATION_GUARD);
   segments.push(`画幅比例：${input.ratio}。`);
-  if (referenceUsage === "explore") segments.push(REFERENCE_EXPLORE_COMPOSITION_GUARD);
+  if (referenceUsage === "explore") segments.push(getReferenceExploreCompositionGuard(input));
   return segments.join("\n").replace(/[ \t]+\n/g, "\n").trim();
 }
 
 export function createBlueprintInstructions(input) {
   const referenceUsage = normalizeReferenceUsage(input.referenceUsage);
+  const characterStyleExploration = input.dimensionId === "character_style";
   const dynamicExploration = input.dynamicExploration === true;
   const completionBase = isRecord(input.completionBase) ? input.completionBase : null;
   const existingDirectionNames = Array.isArray(completionBase?.existingOptions)
@@ -272,12 +292,20 @@ export function createBlueprintInstructions(input) {
   const explicitRequirementsRule = input.promptProfile === "brand-application"
     ? `用户明确给出的视觉要求、专有名词、品牌名、型号、指定文案和禁止项必须完整保留。对于品牌应用，文字与参考图发生物理结构冲突时，必须服从上述品牌应用证据规则：文字决定设计意图，参考图决定应用面是否存在与可落地位置；只有“${input.dimensionName}”可以覆盖。`
     : `用户关于视觉内容的明确要求优先于参考图推断。原始输入中的非变量事实、专有名词、品牌名、型号、指定文案和禁止项必须完整保留，允许原样复用；只有“${input.dimensionName}”可以覆盖。`;
-  const dynamicExplorationRule = dynamicExploration
-    ? "当前探索使用设计风格：载体识别只是生成前的固定解析步骤，不是探索变量。必须基于已识别载体的品类、材质、使用场景和应用面，自行命名彼此不同、可直接比较的整套视觉风格 targetOption；targetOption 必须是视觉风格名称，不得命名为载体适配、单面强化、双面协同、上部招牌、下部横幅或其他应用面操作。每个风格都必须落到同一组已识别应用面：只有一个应用面时，在该面完整应用当前风格；有多个应用面时，将同一风格系统同步应用到全部应用面并保持原有信息分配。不得假定不存在的上/下、前/后、侧面或第二个应用面，也不得把实体载体改成另一类对象。"
-    : "";
-  const dynamicDiversityRule = dynamicExploration
-    ? `风格多样性规则：${input.optionCount} 套方案必须分属 ${input.optionCount} 个不同的主风格家族，并且都适合当前载体与使用场景。可从现代主义网格、极简商业品牌、国潮喜庆、高饱和街头快闪、街头涂鸦、实验拼贴、复古商业印刷、东方传统装饰、民俗版画、波普漫画、萌趣插画、手绘插画、生活方式摄影、未来数字等不同家族中选择，但不要机械照抄示例。不得用近义词、同一家族的子风格、仅替换颜色、年代或地域修饰词来凑数量；任意两套方案在视觉语言、图像媒介、字体策略、装饰语汇或表面工艺中至少有两项明显不同。`
-    : "";
+  const dynamicExplorationRule = !dynamicExploration
+    ? ""
+    : input.dimensionId === "character_style"
+      ? "当前探索使用卡通 / 角色风格：基于当前人物身份、用途和参考图（如有），自行命名彼此不同、可直接比较的角色风格 targetOption。targetOption 必须是简短的风格名称，不得使用“方案一”“角色适配”或单一材质、颜色、动作作为名称。若用户提到小红书封面、教程讲解、知识文章、社媒内容或表情包，优先从 Q版卡通 2D、Q版表情包 IP、软胶潮玩 3D、扁平知识漫画、手帐贴纸角色、温柔绘本角色等适配家族中选择；同时可按需要纳入黏土软质感、几何吉祥物、手绘线稿等方向。每个 prompt 都必须完整描述该角色风格的轮廓、五官、比例、材质或笔触，而不只是写一个风格标签。"
+      : input.dimensionId === "visual_style"
+        ? "当前探索使用设计风格：基于当前任务、主题、用途、受众和参考图（如有），自行命名彼此不同、可直接比较的整套视觉风格 targetOption。targetOption 必须是视觉风格名称，不得使用“方案一”“主体适配”或仅描述颜色、镜头、版式操作的名称；每个 prompt 必须把对应视觉语言落到图像媒介、排版、材质、色彩、光线或装饰语汇中。"
+        : "当前探索使用设计风格：载体识别只是生成前的固定解析步骤，不是探索变量。必须基于已识别载体的品类、材质、使用场景和应用面，自行命名彼此不同、可直接比较的整套视觉风格 targetOption；targetOption 必须是视觉风格名称，不得命名为载体适配、单面强化、双面协同、上部招牌、下部横幅或其他应用面操作。每个风格都必须落到同一组已识别应用面：只有一个应用面时，在该面完整应用当前风格；有多个应用面时，将同一风格系统同步应用到全部应用面并保持原有信息分配。不得假定不存在的上/下、前/后、侧面或第二个应用面，也不得把实体载体改成另一类对象。";
+  const dynamicDiversityRule = !dynamicExploration
+    ? ""
+    : input.dimensionId === "character_style"
+      ? `角色风格多样性规则：${input.optionCount} 套方案必须分属 ${input.optionCount} 个不同的角色视觉家族。不得用“可爱Q版、萌系Q版、治愈Q版”这类近义词凑数量，也不得只替换背景、颜色、表情或服装细节；任意两套方案至少在绘制媒介、轮廓语言、头身与五官概括、材质、线条或内容使用方式中的两项明显不同。人物身份锚点、服装类别、主色和基本姿态保持一致。`
+      : input.dimensionId === "visual_style"
+        ? `设计风格多样性规则：${input.optionCount} 套方案必须分属 ${input.optionCount} 个不同的主风格家族，并且适合当前任务和使用场景。可从极简编辑、复古印刷、未来数字、生活方式摄影、瑞士网格、实验拼贴、手作纸艺、波普漫画、民俗版画、自然绘本、商业插画、街头快闪等不同家族中选择，但不要机械照抄示例。不得用近义词、同一家族子风格、仅替换颜色、年代或地域修饰词来凑数量；任意两套方案在视觉语言、图像媒介、字体策略、装饰语汇或表面工艺中至少有两项明显不同。`
+        : `风格多样性规则：${input.optionCount} 套方案必须分属 ${input.optionCount} 个不同的主风格家族，并且都适合当前载体与使用场景。可从现代主义网格、极简商业品牌、国潮喜庆、高饱和街头快闪、街头涂鸦、实验拼贴、复古商业印刷、东方传统装饰、民俗版画、波普漫画、萌趣插画、手绘插画、生活方式摄影、未来数字等不同家族中选择，但不要机械照抄示例。不得用近义词、同一家族的子风格、仅替换颜色、年代或地域修饰词来凑数量；任意两套方案在视觉语言、图像媒介、字体策略、装饰语汇或表面工艺中至少有两项明显不同。`;
   const priorityStyleRule = input.promptProfile === "brand-application" && dynamicExploration && totalRequestedOptionCount >= 10
     ? [
         "已验证优先风格锚点规则：先结合用户文字与参考图，判断载体及使用场景是否属于餐饮摊车、市集摊位、餐饮快闪、节庆售卖或其他适合高识别度消费视觉的场景。",
@@ -315,6 +343,14 @@ export function createBlueprintInstructions(input) {
   const explorationGuidanceRule = explorationGuidanceLines.length
     ? `当前探索目标的样本语义参考（只用于对应目标，不改变原始主体、动作、目的地和信息结构）：${explorationGuidanceLines.join("；")}`
     : "";
+  const characterStyleRule = characterStyleExploration
+    ? "角色风格提取与转换规则：locked.subject 只记录跨方案稳定的身份锚点、发型特征、服装类别与主色、人物数量和必要配件，不得把真人皮肤纹理、写实光影、精细衣褶、正常人体比例、修长或匀称身材、照片级五官等可被卡通化重塑的外观写成固定条件。每个 variant.prompt 必须明确写出保留哪些身份锚点，并用当前 targetOption 的轮廓、五官简化、体块、材质和绘制媒介完整重画角色；风格差异必须在缩略图和无标签状态下仍清楚可辨，不能只换滤镜、背景色、光线或表面纹理。角色风格允许目标风格所必需的定性比例夸张，但不得覆盖用户明确指定的精确头身比；精确探索 2 头身、3 头身、5 头身等仍属于“角色比例”维度。"
+    : "";
+  const characterReferenceExtentRule = hasReferenceImage && referenceUsage === "explore" && input.promptProfile === "character-ip"
+    ? contentMode === "factual"
+      ? "角色参考图范围规则（事实保守）：必须先识别图片1实际展示的是头像、胸像、半身、四分之三身还是全身，并把该可见范围写入 locked.composition。默认保持相同取景和身体范围，不得把照片边界外不可见的身体、服装、鞋子、配件、姿态或背景当作可推断事实。只有用户文字同时明确提出补全要求，并明确给出缺失部分的服装、身体范围或姿态信息时，才可按已提供内容扩展；仅写“做成全身”但没有提供缺失部分信息时，仍不得自行补造。"
+      : "角色参考图范围规则（概念补全）：必须先识别图片1实际展示的是头像、胸像、半身、四分之三身还是全身，并把该可见范围写入 locked.composition。若参考图不是全身，允许根据已见身份锚点和服装连续性合理补足画面外身体、基础服装、姿态和简单背景，以形成完整角色方案；推断内容保持中性、简洁，不得新增品牌、Logo、文字、独特配件或身份信息。用户明确要求保持原取景时不得扩展。"
+    : "";
   const refinementRule = completionBase
     ? ""
     : onlineFirstPass
@@ -338,6 +374,8 @@ export function createBlueprintInstructions(input) {
     contentModeRule,
     posterNarrativeRule,
     explorationGuidanceRule,
+    characterStyleRule,
+    characterReferenceExtentRule,
     `当前唯一允许变化的维度是“${input.dimensionName}”：${input.dimensionDescription}。其他非变量事实必须保持一致${lockFields ? `，尤其是：${lockFields}` : ""}。不要使用与当前维度冲突的固定条件。`,
     refinementRule,
     explicitRequirementsRule,

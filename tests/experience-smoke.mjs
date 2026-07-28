@@ -95,6 +95,7 @@ let imageGenerationCount = 0;
 let imageTaskCount = 0;
 let lastImageRequestBody = null;
 let lastTextRequestBody = null;
+let dynamicDirectionBatch = 0;
 page.on("console", (message) => {
   if (message.type() === "error") consoleErrors.push(message.text());
 });
@@ -109,6 +110,10 @@ await page.route("**/responses", (route) => {
   if (promptFailure === "timeout") return route.abort("timedout");
   if (promptFailure === "rate-limit") return route.fulfill({ status: 429, contentType: "application/json", body: JSON.stringify({ error: "文本生成请求过于频繁，请稍后重试" }) });
   if (promptFailure === "service") return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "文本生成服务暂时不可用，请稍后重试" }) });
+  const targetOptions = requestInput.explorationOptions.length
+    ? requestInput.explorationOptions
+    : Array.from({ length: requestInput.optionCount }, (_, index) => `动态视觉方向 ${dynamicDirectionBatch + 1}-${index + 1}`);
+  if (!requestInput.explorationOptions.length) dynamicDirectionBatch += 1;
   return route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({
@@ -126,7 +131,7 @@ await page.route("**/responses", (route) => {
           textLayout: "标题与内容区清晰分层",
           constraints: []
         },
-        variants: requestInput.explorationOptions.map((targetOption, index) => ({
+        variants: targetOptions.map((targetOption, index) => ({
           id: `variant_test_${index + 1}`,
           title: index === 0 ? "测试方向" : "测试方向二",
           targetOption,
@@ -510,7 +515,7 @@ try {
   }));
   assert(componentContract.selectWrappers >= 2, "选择控件未使用统一包裹结构");
   assert(componentContract.selectIndicators, "选择控件缺少统一箭头指示器");
-  assert(componentContract.optionValues.join(",") === "2,3,4,5,6", "生成数量选项未覆盖 2 至 6 套");
+  assert(componentContract.optionValues.join(",") === "2,3,4,5,6,8,10", "动态风格的生成数量选项未覆盖 2 至 10 套");
   assert(componentContract.plusBox.width === componentContract.plusBox.height, "上传图标容器不是稳定正方形");
   assert(componentContract.iconButtons.every((item) => item.width === "32px" && item.height === "32px" && ["grid", "none"].includes(item.display) && item.placeItems === "center" && item.padding === "0px" && item.hasSvg), "图标按钮未使用稳定的 SVG 居中结构");
   const formControlTypography = await page.evaluate(() => [...document.querySelectorAll("input, textarea, select")]
@@ -823,7 +828,7 @@ try {
   });
   assert(imageDialogHeaderAlignment.controlsAligned && imageDialogHeaderAlignment.titleAligned, "大图弹窗标题、下载和关闭控件未按同一中心线对齐");
   if (process.env.IMAGE_DIALOG_SCREENSHOT) await page.screenshot({ path: process.env.IMAGE_DIALOG_SCREENSHOT, fullPage: false });
-  assert(await page.locator("#imagePreviewTitle").textContent() === "复古印刷感", "大图预览未显示固定探索项标题");
+  assert(await page.locator("#imagePreviewTitle").textContent() === await page.locator(".generation-card-title-text").textContent(), "大图预览未显示当前探索项标题");
   const previewImageSource = await page.locator("#imagePreviewImage").getAttribute("src");
   assert(previewImageSource.startsWith("blob:"), "大图预览未使用已验证的 Blob 图片地址");
   assert((await page.locator(".generation-card-meta").textContent()).includes("实际返回 URL"), "服务端返回 URL 时结果卡未展示实际响应格式");
@@ -1017,7 +1022,8 @@ try {
   })));
   assert(narrowDesktopCards.length > 0 && narrowDesktopCards.every((item) => item.width <= 480 && item.thumbnailHeight === 180), "1024px 桌面端未保持舒适结果卡宽度");
   await page.setViewportSize({ width: 1440, height: 960 });
-  await page.locator("#resultSearchInput").fill("复古印刷感");
+  const searchTarget = await page.locator(".generation-card-title-text").first().textContent();
+  await page.locator("#resultSearchInput").fill(searchTarget || "");
   assert(await page.locator(".generation-card").count() === 1, "结果关键词搜索未正确过滤");
   await page.locator("#resultStatusFilter").selectOption("ready");
   assert(await page.locator(".generation-card").count() === 1, "结果状态筛选未保留匹配项");

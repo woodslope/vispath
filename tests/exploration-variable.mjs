@@ -94,6 +94,12 @@ try {
 
   assert.equal(await page.locator('input[name="contentMode"]').count(), 2, "内容模式应提供概念补全和事实保守两项选择");
   assert(await page.locator('input[name="contentMode"][value="concept"]').isChecked(), "默认内容模式应为概念补全");
+  await page.locator("#taskType").selectOption("character_ip");
+  assert.equal(await page.locator("#characterStyleCollectionField").count(), 0, "角色风格不应再要求用户选择风格组");
+  assert.deepEqual(await page.locator("#optionCount option").evaluateAll((options) => options.map((option) => option.value)), ["2", "3", "4", "5", "6", "8", "10"], "卡通 / IP 的角色风格应支持直接生成 8 或 10 套方向");
+  await page.locator("#taskType").selectOption("poster");
+  await page.locator('#dimensionList input[value="visual_style"]').check();
+  assert.deepEqual(await page.locator("#optionCount option").evaluateAll((options) => options.map((option) => option.value)), ["2", "3", "4", "5", "6", "8", "10"], "海报设计风格也应支持直接生成 8 或 10 套方向");
   await page.locator("#sourcePrompt").fill(basePrompt);
   await page.locator('#dimensionList input[value="color_style"]').check();
   await page.locator("#optionCount").selectOption("3");

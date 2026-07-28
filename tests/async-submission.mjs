@@ -71,12 +71,15 @@ await page.route("**/responses", (route) => {
   body: JSON.stringify({
     output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify({
       locked: { intent: "异步生图测试", subject: "白色马克杯" },
-      variants: requestInput.explorationOptions.map((targetOption, index) => ({
+      variants: (requestInput.explorationOptions.length
+        ? requestInput.explorationOptions
+        : Array.from({ length: requestInput.optionCount }, (_, index) => `动态视觉方向 ${index + 1}`))
+        .map((targetOption, index) => ({
         title: `异步方向${index + 1}`,
         targetOption,
         changeSummary: `验证${targetOption}异步提交`,
         prompt: `一只白色马克杯，横向构图，${targetOption}，方案${index + 1}`
-      }))
+        }))
     }) }] }]
   })
   });

@@ -1003,7 +1003,9 @@ function renderBlueprintPreview() {
   const contentModeSummary = state.contentMode === "factual" ? " · 事实保守" : " · 概念补全";
   const dimension = selectedDimension();
   const explorationSummary = dimension.dynamicOptions
-    ? `${dimension.name} · AI 将识别载体与应用面后生成 ${$("optionCount").value} 套适配风格`
+    ? dimension.id === "application_visual_style"
+      ? `${dimension.name} · AI 将识别载体与应用面后生成 ${$("optionCount").value} 套适配风格`
+      : `${dimension.name} · AI 将根据当前用途生成 ${$("optionCount").value} 套不同方向`
     : `${dimension.name} · ${$("optionCount").value} 套方案`;
   $("blueprintStatus").textContent = "实时预览";
   $("blueprintPanel").innerHTML = `
@@ -2650,7 +2652,7 @@ async function completeMissingDirections() {
   const existingPromptKeys = new Set(currentVariants.map((variant) => normalizeDirectionKey(variant.prompt)));
   const missingFixedOptions = dimension.dynamicOptions
     ? []
-    : dimension.defaultOptions.slice(0, requestedOptionCount).filter((option) => !existingOptionKeys.has(normalizeDirectionKey(option)));
+    : getExplorationOptions(dimension, requestedOptionCount).filter((option) => !existingOptionKeys.has(normalizeDirectionKey(option)));
   const completionOptionCount = dimension.dynamicOptions ? missingOptionCount : missingFixedOptions.length;
   if (!completionOptionCount) return;
 
